@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0e1525">
+<meta name="description" content="Turn your study materials into notes and practice exams with Gemini.">
+<title>Studyroom — Your study workspace</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/styles.css">
+<script type="module" src="/app.js"></script>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<div class="shell">
+  <aside class="sidebar" aria-label="Workspace">
+    <button class="brand" data-nav="overview"><span class="brand-mark" data-icon="brand"></span><span>Studyroom</span></button>
+    <div class="sidebar-body">
+      <p class="nav-label">WORKSPACE</p>
+      <nav aria-label="Main navigation">
+        <button class="nav-item active" data-nav="overview"><span data-icon="grid"></span><span>Overview</span></button>
+        <button class="nav-item" data-nav="materials"><span data-icon="folder"></span><span>Materials</span></button>
+        <button class="nav-item" data-nav="practice"><span data-icon="bolt"></span><span>Practice exams</span></button>
+        <button class="nav-item" data-nav="notes"><span data-icon="notes"></span><span>Notes</span></button>
+        <button class="nav-item" data-nav="board"><span data-icon="board"></span><span>Studyboard</span></button>
+      </nav>
+    </div>
+    <div class="sidebar-foot">
+      <div class="connection"><span class="connection-icon" data-icon="spark"></span><div><strong>Gemini</strong><span id="connection-status">Connect your API key</span></div></div>
+      <button class="nav-item" data-action="settings"><span data-icon="settings"></span><span>Settings</span></button>
+    </div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><div class="breadcrumbs"><span>Workspace</span><span class="divider">/</span><strong id="crumb">Overview</strong></div><button class="button outline top-settings" data-action="settings"><span class="top-status" aria-hidden="true"></span><span data-icon="spark"></span><span>Gemini settings</span></button></header>
+    <main id="main" tabindex="-1"></main>
+  </div>
+</div>
+<dialog id="modal" aria-labelledby="dialog-title"><div id="dialog-content"></div></dialog>
+<div id="toast" role="status" aria-live="polite"></div>
+</body>
+</html>
