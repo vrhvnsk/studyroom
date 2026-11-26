@@ -140,14 +140,15 @@ const gazeMessages = {
   unavailable:"Keep your face in view and your eyes comfortably open.",
   near:"Estimated gaze is near your camera baseline.",
   away:"Estimated gaze has shifted from your camera baseline.",
+  alert:"Gaze has remained outside the allowed area for more than 2 seconds.",
   paused:"Camera off. Turn it back on to recalibrate and continue.",
 };
 
 function gazePanel() {
   return '<section class="gaze-panel" aria-labelledby="gaze-title" data-gaze-state="off"><div class="gaze-scope" aria-hidden="true"><i></i><b></b></div>' +
     '<div class="gaze-copy"><div class="gaze-heading"><h3 id="gaze-title">Eye tracking</h3><span class="gaze-chip">Camera off</span></div>' +
-    '<p class="gaze-message">' + gazeMessages.off + '</p><div class="gaze-progress" aria-hidden="true" hidden><span></span></div>' +
-    '<details class="gaze-privacy"><summary>About camera feedback</summary><p>Camera images are processed on this device and discarded. Your review saves aggregate estimates on this device. Looking away is normal and has no effect on your score.</p></details></div>' +
+    '<p class="gaze-message" role="status" aria-live="polite">' + gazeMessages.off + '</p><div class="gaze-progress" aria-hidden="true" hidden><span></span></div>' +
+    '<details class="gaze-privacy"><summary>About camera feedback</summary><p>Camera images are processed on this device and discarded. Your review saves aggregate estimates and a timestamped eye-tracking event log on this device. Looking away is normal and has no effect on your score.</p></details></div>' +
     '<div class="gaze-controls"><button type="button" class="button outline" data-action="toggle-gaze">' + icon("camera") + '<span>Turn on camera</span></button>' +
     '<button type="button" class="button quiet" data-action="recalibrate-gaze" hidden>' + icon("focus") + 'Recalibrate</button></div></section>';
 }
@@ -156,7 +157,7 @@ function paintGaze() {
   const panel = main.querySelector(".gaze-panel");
   if (!panel || !session?.gaze) return;
   const { status, progress, x, y, error } = session.gazeView;
-  const tag = { permission:"Starting", loading:"Loading", calibrating:"Calibrating", unavailable:"Low signal", near:"Camera on", away:"Camera on", error:"Unavailable" };
+  const tag = { permission:"Starting", loading:"Loading", calibrating:"Calibrating", unavailable:"Low signal", near:"Camera on", away:"Camera on", alert:"Outside area", error:"Unavailable" };
   panel.dataset.gazeState = status;
   const setText = (selector, value) => {
     const node = panel.querySelector(selector);
@@ -180,6 +181,7 @@ function stopGaze(update = true) {
   const camera = gazeCamera;
   gazeCamera = null;
   camera.stop();
+  session?.gaze?.logAction("Eye tracking stopped");
   if (update && session?.gaze) {
     session.gazeView = { status:"paused" };
     paintGaze();
@@ -190,10 +192,12 @@ function toggleGaze() {
   if (gazeCamera) { stopGaze(); return; }
   const current = session;
   if (!current?.gaze || document.hidden) return;
-  current.gaze.recalibrate();
+  current.gaze.logAction("Eye tracking start requested");
+  current.gaze.recalibrate("Calibration started");
   const camera = startGazeCamera({
     onState(status) {
       if (gazeCamera !== camera) return;
+      if (status === "ready") current.gaze.logAction("Eye tracking started");
       current.gazeView = { status:status === "ready" ? "calibrating" : status };
       paintGaze();
     },
@@ -205,6 +209,7 @@ function toggleGaze() {
     onError(error) {
       if (gazeCamera !== camera) return;
       gazeCamera = null;
+      current.gaze.logAction("Eye tracking failed: " + error);
       current.gazeView = { status:"error", error };
       paintGaze();
       notify(error);
@@ -221,8 +226,11 @@ function gazeReview(summary) {
     '<dl class="gaze-metrics"><div><dt>Near camera baseline</dt><dd>' + summary.nearPercent + '%</dd></div>' +
     '<div><dt>Usable camera time</dt><dd>' + summary.trackedSeconds + ' s</dd></div>' +
     '<div><dt>Usable sample coverage</dt><dd>' + summary.coverage + '%</dd></div></dl>';
+  const events = summary.events?.length ? '<details class="gaze-event-log"><summary>Eye-tracking event log (' + summary.events.length + ')</summary><ol>' +
+    summary.events.map(({ action, at }) => '<li><time datetime="' + html(at) + '">' +
+      html(new Date(at).toLocaleTimeString()) + '</time> ' + html(action) + '</li>').join("") + '</ol></details>' : "";
   return '<section class="panel gaze-review"><div class="resource-name">' + toolIcon("eye","blue") +
-    '<div><h2>Eye tracking feedback</h2><p class="subtle">An estimate of where you looked relative to your calibration. This has no effect on your exam score.</p></div></div>' + data + '</section>';
+    '<div><h2>Eye tracking feedback</h2><p class="subtle">An estimate of where you looked relative to your calibration. This has no effect on your exam score.</p></div></div>' + data + events + '</section>';
 }
 
 function sourceById(sourceId) { return data.sources.find((source) => source.id === sourceId); }
@@ -511,8 +519,10 @@ async function submitAnswer(form) {
   if (current.index === current.questions.length) {
     const score = Math.round(current.answers.reduce((total, item) => total + item.score, 0) / current.answers.length);
     report = { id:id(), mode:current.mode, sample:current.sample, completed:new Date().toISOString(), answers:current.answers, score };
-    if (current.gaze && current.gazeView.status !== "off") report.gaze = current.gaze.summary();
     stopGaze(false);
+    if (current.gaze && current.gazeView.status !== "off") {
+      report.gaze = { ...current.gaze.summary(), events:current.gaze.events() };
+    }
     data.history.unshift(report);
     data.history = data.history.slice(0, 40);
     session = null;

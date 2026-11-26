@@ -18,9 +18,9 @@ The browser stores materials, generated packs, board changes, and completed exam
 
 ## Oral exam eye tracking
 
-Eye tracking starts off in every oral exam. Choose **Turn on camera**, allow camera access, and hold your gaze on the webcam to calibrate. The moving dot shows approximate gaze relative to your camera baseline. If your setup changes, choose **Recalibrate**. You can turn the camera off at any time.
+Eye tracking starts off in every oral exam. Choose **Turn on camera**, allow camera access, and hold your gaze on the webcam to calibrate. The moving dot shows approximate gaze relative to your camera baseline. The allowed area around that baseline is intentionally small; if gaze remains outside it for more than two seconds, the tracker shows a red alert. If your setup changes, choose **Recalibrate**. You can turn the camera off at any time.
 
-The browser downloads the pinned [MediaPipe Face Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker?tab=Web) and runs it locally in a dedicated worker. Studyroom discards frames and saves only aggregate results in the completed session's local review. Gaze is a rehearsal aid and is independent of Gemini and exam scores. Camera access requires HTTPS or localhost and a browser with the required webcam, worker, and graphics APIs.
+The browser downloads the pinned [MediaPipe Face Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker?tab=Web) and runs it locally in a dedicated worker. Studyroom discards camera frames and saves aggregate results plus a timestamped log of eye-tracking actions in the completed session's local review. Gaze is a rehearsal aid and is independent of Gemini and exam scores. Camera access requires HTTPS or localhost and a browser with the required webcam, worker, and graphics APIs.
 
 ## Verify and build
 

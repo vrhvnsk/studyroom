@@ -2,7 +2,9 @@ const MIN_CALIBRATION_MS = 1_450;
 const MAX_CALIBRATION_SPREAD = 0.15;
 const MIN_VIEW_MS = 3_000;
 const MAX_FRAME_GAP_MS = 400;
-const CAMERA_RADIUS = 0.29;
+const OUT_OF_RANGE_MS = 2_000;
+const CAMERA_RADIUS = 0.20;
+const CAMERA_HYSTERESIS = 0.03;
 const EYES = [
   { corners:[33, 133], lids:[159, 145], iris:468 },
   { corners:[362, 263], lids:[386, 374], iris:473 },
@@ -61,15 +63,35 @@ export function createGazeSession() {
   let trackedMs = 0;
   let nearMs = 0;
   let untrackedMs = 0;
+  let awaySince;
+  let alertActive = false;
+  const actionLog = [];
+
+  function logAction(action) {
+    actionLog.push({ action, at:new Date().toISOString() });
+  }
+
+  function clearAlert(action) {
+    if (!alertActive) return;
+    alertActive = false;
+    logAction(action);
+  }
 
   return {
-    recalibrate() {
+    logAction,
+    events() {
+      return actionLog.map(({ action, at }) => ({ action, at }));
+    },
+    recalibrate(action = "Recalibration started") {
+      clearAlert("Out-of-range alert cleared by recalibration");
+      logAction(action);
       baseline = undefined;
       samples = [];
       calibrationStarted = undefined;
       previousTime = undefined;
       smoothed = undefined;
       current = undefined;
+      awaySince = undefined;
     },
     sample(point, time) {
       if (!baseline) {
@@ -90,25 +112,43 @@ export function createGazeSession() {
         baseline = { x:mean(samples, "x"), y:mean(samples, "y") };
         samples = [];
         previousTime = undefined;
+        logAction("Calibration completed");
       }
       const gap = previousTime === undefined ? 0 : time - previousTime;
       previousTime = time;
-      const elapsed = gap > 0 && gap <= MAX_FRAME_GAP_MS ? gap : 0;
-      if (!elapsed) smoothed = undefined;
+      const continuous = gap > 0 && gap <= MAX_FRAME_GAP_MS;
+      const elapsed = continuous ? gap : 0;
+      if (!continuous) {
+        smoothed = undefined;
+        awaySince = undefined;
+        clearAlert("Out-of-range alert cleared because tracking was interrupted");
+      }
       if (!point) {
         smoothed = undefined;
         current = undefined;
+        awaySince = undefined;
         untrackedMs += elapsed;
+        clearAlert("Out-of-range alert cleared because gaze became unavailable");
         return { status:"unavailable", progress:100 };
       }
       const offset = { x:point.x - baseline.x, y:point.y - baseline.y };
       smoothed = smoothed ? { x:0.35 * offset.x + 0.65 * smoothed.x, y:0.35 * offset.y + 0.65 * smoothed.y } : offset;
       const distance = Math.hypot(smoothed.x, smoothed.y);
-      const threshold = current === "near" ? CAMERA_RADIUS + 0.04 : CAMERA_RADIUS;
+      const threshold = current === "near" ? CAMERA_RADIUS + CAMERA_HYSTERESIS : CAMERA_RADIUS;
       current = distance <= threshold ? "near" : "away";
       trackedMs += elapsed;
-      if (current === "near") nearMs += elapsed;
-      return { status:current, progress:100, x:smoothed.x, y:smoothed.y };
+      if (current === "near") {
+        nearMs += elapsed;
+        awaySince = undefined;
+        clearAlert("Out-of-range alert cleared");
+      } else {
+        if (!continuous || awaySince === undefined) awaySince = time;
+        if (!alertActive && time - awaySince > OUT_OF_RANGE_MS) {
+          alertActive = true;
+          logAction("Red alert activated: gaze remained outside the allowed area for more than 2 seconds");
+        }
+      }
+      return { status:alertActive ? "alert" : current, progress:100, x:smoothed.x, y:smoothed.y };
     },
     summary() {
       const total = trackedMs + untrackedMs;
