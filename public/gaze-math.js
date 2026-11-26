@@ -4,6 +4,7 @@ const MIN_VIEW_MS = 3_000;
 const MAX_FRAME_GAP_MS = 400;
 const REVIEW_SHIFT_MS = 8_000;
 const CAMERA_RADIUS = 0.29;
+const CAMERA_EDGE_RADIUS = CAMERA_RADIUS * 0.8;
 const EYES = [
   { corners:[33, 133], lids:[159, 145], iris:468 },
   { corners:[362, 263], lids:[386, 374], iris:473 },
@@ -134,7 +135,9 @@ export function createGazeSession() {
           countedAway = true;
         }
       }
-      return { status:current, progress:100, x:smoothed.x, y:smoothed.y };
+      const zone = distance > CAMERA_RADIUS ? "outside" :
+        distance >= CAMERA_EDGE_RADIUS ? "edge" : "inside";
+      return { status:current, progress:100, x:smoothed.x, y:smoothed.y, zone };
     },
     summary() {
       const total = trackedMs + untrackedMs;

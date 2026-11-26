@@ -166,22 +166,25 @@ function gazePanel() {
 function paintGaze() {
   const panel = main.querySelector(".gaze-panel");
   if (!panel || !session?.gaze) return;
-  const { status, progress, x, y, error } = session.gazeView;
+  const { status, progress, x, y, zone, error } = session.gazeView;
   const tag = { permission:"Starting", loading:"Loading", calibrating:"Calibrating", unavailable:"Low signal", near:"Camera on", away:"Camera on", error:"Unavailable" };
   panel.dataset.gazeState = status;
+  if (zone) panel.dataset.gazeZone = zone;
+  else delete panel.dataset.gazeZone;
   const setText = (selector, value) => {
     const node = panel.querySelector(selector);
     if (node.textContent !== value) node.textContent = value;
   };
-  setText(".gaze-chip", tag[status] || "Camera off");
-  setText(".gaze-message", error || gazeMessages[status]);
+  setText(".gaze-chip", zone === "edge" ? "Near limit" : zone === "outside" ? "Out of bounds" : tag[status] || "Camera off");
+  setText(".gaze-message", error || (zone === "edge" ? "Gaze is approaching the calibrated viewing boundary." :
+    zone === "outside" ? "Gaze is outside the calibrated viewing boundary." : gazeMessages[status]));
   setText("[data-action=toggle-gaze] span", gazeCamera ? "Turn off camera" : "Turn on camera");
   panel.querySelector("[data-action=recalibrate-gaze]").hidden = !gazeCamera || status === "permission" || status === "loading";
   const calibration = panel.querySelector(".gaze-progress");
   calibration.hidden = status !== "calibrating";
   calibration.firstElementChild.style.width = (progress || 0) + "%";
   const scope = panel.querySelector(".gaze-scope");
-  const offset = (value) => Math.max(-23, Math.min(23, (value || 0) * 38)) + "px";
+  const offset = (value) => Math.max(-23, Math.min(23, (value || 0) * 50)) + "px";
   scope.style.setProperty("--gaze-x", offset(-x));
   scope.style.setProperty("--gaze-y", offset(y));
 }

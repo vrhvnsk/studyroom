@@ -25,6 +25,19 @@ test("iris motion changes the returned signal and blinks or missing faces are ex
   assert.equal(gazeSignal(undefined, 400, 300), null);
 });
 
+test("gaze feedback distinguishes in-range, boundary, and out-of-bounds zones", () => {
+  function zoneAt(x) {
+    const signal = createGazeSession();
+    for (let time = 0; time <= 1_500; time += 150) signal.sample({ x:0, y:0 }, time);
+    let sample;
+    for (let time = 1_650; time <= 4_500; time += 150) sample = signal.sample({ x, y:0 }, time);
+    return sample.zone;
+  }
+  assert.equal(zoneAt(0.20), "inside");
+  assert.equal(zoneAt(0.25), "edge");
+  assert.equal(zoneAt(0.31), "outside");
+});
+
 test("calibration ignores time before a stable baseline, and the report tracks usable coverage", () => {
   const signal = createGazeSession();
   const center = { x:0.12, y:0.48 };
