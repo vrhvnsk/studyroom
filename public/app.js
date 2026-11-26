@@ -40,6 +40,11 @@ const modes = {
 };
 const pages = { overview:"Overview", materials:"Materials", practice:"Practice exams", notes:"Notes", board:"Studyboard" };
 const statuses = { todo:"To study", review:"Reviewing", done:"Mastered" };
+const aiProviders = {
+  gemini:{ name:"Gemini", option:"Google Gemini", url:"https://aistudio.google.com/api-keys", audio:true },
+  openai:{ name:"OpenAI", option:"OpenAI GPT", url:"https://platform.openai.com/api-keys", audio:true },
+  anthropic:{ name:"Claude", option:"Anthropic Claude", url:"https://platform.claude.com/settings/keys", audio:false },
+};
 const maxPdf = 10 * 1024 * 1024;
 const maxText = 150_000;
 const html = (value = "") => String(value).replace(/[&<>"']/g, (character) => ({
@@ -50,14 +55,17 @@ const button = (label, action, style = "outline", glyph = "") => '<button type="
 const badge = (label, neutral = false) => '<span class="status' + (neutral ? ' neutral' : '') + '">' + html(label) + '</span>';
 const toolIcon = (glyph, color = "") => '<span class="tool-icon ' + color + '">' + icon(glyph) + '</span>';
 const formatDate = (date) => new Intl.DateTimeFormat(undefined, { month:"short", day:"numeric" }).format(new Date(date));
-const connected = () => Boolean(apiKey || config.serverKey);
+const activeProvider = () => aiProviders[provider];
+const connected = () => Boolean(apiKeys[provider] || providerConfig[provider]?.serverKey);
 const activeData = () => data.pack;
 const activeSources = () => data.sources.filter((source) => !source.sample);
 const route = () => Object.hasOwn(pages, location.hash.slice(1)) ? location.hash.slice(1) : "overview";
 
 let data = sampleWorkspace();
-let config = { serverKey:false, model:"gemini-3.8-flash" };
-let apiKey = "";
+let providerConfig = {};
+let provider = "gemini";
+let providerPicked = false;
+const apiKeys = {};
 let screen = route();
 let session = null;
 let report = null;
@@ -88,14 +96,15 @@ function persist() {
   return saving;
 }
 
-async function gemini(action, payload = {}, key = apiKey) {
+async function requestAI(action, payload = {}, selected = provider, key = apiKeys[selected]) {
   const headers = { "Content-Type":"application/json" };
   if (key) headers["x-studyroom-key"] = key;
-  const response = await fetch("/api/gemini", { method:"POST", headers, body:JSON.stringify({ action, ...payload }) });
-  let result;
-  try { result = await response.json(); }
-  catch { throw new Error("Studyroom could not reach Gemini. Try again."); }
-  if (!response.ok) throw new Error(result.error || "Gemini is temporarily unavailable.");
+  let response, result;
+  try {
+    response = await fetch("/api/ai", { method:"POST", headers, body:JSON.stringify({ action, provider:selected, ...payload }) });
+    result = await response.json();
+  } catch { throw new Error("Studyroom could not connect to " + aiProviders[selected].name + ". Try again."); }
+  if (!response.ok) throw new Error(result.error || aiProviders[selected].name + " is temporarily unavailable.");
   return result;
 }
 
@@ -125,12 +134,20 @@ function busyForm(form, busy, label = "") {
 
 const alertBox = '<p class="notice error" role="alert" hidden></p>';
 const formEnd = (label) => alertBox + '<div class="modal-actions">' + button("Cancel","close") + '<button class="button primary" type="submit">' + label + '</button></div></form>';
-const settings = () => showDialog("Gemini settings", "Connect a Google AI Studio API key to generate study packs and evaluate answers.",
-  '<form data-form="key"><label class="field">Gemini API key<input name="key" type="password" autocomplete="off" placeholder="Enter your Gemini API key" required maxlength="200"></label>' +
-  '<p class="subtle">Your key stays in memory until you reload or disconnect. Materials and recordings are sent to Google when you ask Gemini to process them.</p>' +
-  '<p class="subtle inline-ref">Model ' + html(config.model) + ' · <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noopener">Get an API key</a></p>' +
-  (connected() ? '<p class="notice">' + (apiKey ? 'A session key is connected.' : 'A server key is configured.') + '</p>' : '') +
-  (apiKey ? button("Disconnect session key","disconnect","quiet") : '') + formEnd("Connect key"));
+function settings() {
+  const { name, url, audio } = activeProvider();
+  const config = providerConfig[provider];
+  const options = Object.entries(aiProviders).map(([id, { option }]) =>
+    '<option value="' + id + '"' + (id === provider ? ' selected' : '') + '>' + option + '</option>').join("");
+  showDialog("AI settings", "Choose the provider for study packs and exam feedback.",
+    '<form data-form="key"><label class="field">AI provider<select name="provider">' + options + '</select></label>' +
+    '<label class="field">' + name + ' API key<input name="key" type="password" autocomplete="off" placeholder="Enter your API key" required maxlength="512"></label>' +
+    '<p class="subtle inline-ref">' + (config?.model ? 'Model ' + html(config.model) + ' · ' : '') + '<a href="' + url + '" target="_blank" rel="noopener">Get an API key</a></p>' +
+    '<p class="subtle">Pasted keys stay in page memory. Studyroom sends selected materials, submitted answers' + (audio ? ', and recordings' : '') + ' to ' + name + ' when you use AI features.</p>' +
+    (!audio ? '<p class="subtle">With Claude, type your oral-exam answers. Gemini and OpenAI also support recording and transcription.</p>' : '') +
+    (connected() ? '<p class="notice">' + (apiKeys[provider] ? 'A session key is connected.' : 'A server key is configured.') + '</p>' : '') +
+    (apiKeys[provider] ? button("Disconnect session key","disconnect","quiet") : '') + formEnd("Connect key"));
+}
 
 const gazeMessages = {
   off:"Turn on your camera to get private delivery feedback during this oral exam.",
@@ -269,7 +286,7 @@ function generateDialog() {
   if (!activeSources().length) { uploadDialog(); return; }
   if (!connected()) { generateAfterConnecting = true; settings(); return; }
   const sources = activeSources();
-  showDialog("Generate a study pack","Select the materials Gemini should turn into notes, practice questions, and studyboard topics.",
+  showDialog("Generate a study pack","Select the materials " + activeProvider().name + " should turn into notes, practice questions, and studyboard topics.",
     '<form data-form="generate"><div class="stack">' + sources.map((source, index) =>
       '<label class="choice"><input type="checkbox" name="sources" value="' + html(source.id) + '"' +
       (sources.length <= 8 || index === 0 ? ' checked' : '') + '>' + html(source.name) + '</label>').join("") + '</div>' +
@@ -292,7 +309,7 @@ function overview() {
   const pack = activeData();
   const spotlight = own.at(-1) || data.sources[0];
   const counts = pack ? pack.oral.length + pack.written.length + pack.quiz.length : 0;
-  return '<section class="hero"><div class="hero-copy"><span class="hero-label">' + icon("spark") + (pack?.sample ? 'Sample pack loaded' : pack ? 'Study pack ready' : 'Gemini study workspace') + '</span>' +
+  return '<section class="hero"><div class="hero-copy"><span class="hero-label">' + icon("spark") + (pack?.sample ? 'Sample pack loaded' : pack ? 'Study pack ready' : 'AI study workspace') + '</span>' +
     '<h1>Study to <em>remember.</em></h1><p>Turn your study materials into clear notes, interactive practice exams, and a plan for what to review next.</p><div class="actions">' +
     button("Add study material","upload","primary","plus") + (own.length ? button("Generate study pack","generate","outline","spark") : button(pack?.sample ? "Try a sample exam" : "Start practice","start:quiz","outline","bolt")) +
     '</div></div><div class="hero-art" aria-hidden="true"><div class="hero-grid"></div><div class="orbit"></div><div class="orbit inner"></div><div class="orbit outer"></div>' +
@@ -310,7 +327,7 @@ function overview() {
 }
 
 function materials() {
-  return intro("Materials","Manage the source documents Gemini uses to build your study pack.",
+  return intro("Materials","Manage the source documents used to build your study pack.",
     button("Add study material","upload","primary","plus") + button("Generate study pack","generate","outline","spark")) +
     '<div class="stack">' + data.sources.map((source) => '<article class="resource row"><div class="resource-name">' +
       toolIcon(source.type === "pdf" ? "notes" : "book", source.sample ? "purple" : "") + '<div><strong>' + html(source.name) + '</strong><p class="subtle">' +
@@ -365,10 +382,15 @@ function navigate(page) {
   window.scrollTo(0, 0);
 }
 
+function renderConnection() {
+  document.querySelector("#connection-provider").textContent = activeProvider().name;
+  document.querySelector("#connection-status").textContent = connected() ? "Connected" : "Connect your API key";
+  document.documentElement.dataset.ai = connected() ? "connected" : "disconnected";
+}
+
 function render() {
   document.querySelector("#crumb").textContent = pages[screen];
-  document.querySelector("#connection-status").textContent = connected() ? "Connected" : "Connect your API key";
-  document.documentElement.dataset.gemini = connected() ? "connected" : "disconnected";
+  renderConnection();
   for (const element of document.querySelectorAll(".nav-item[data-nav]")) {
     const current = element.dataset.nav === screen;
     element.classList.toggle("active", current);
@@ -385,7 +407,7 @@ function practice() {
   const pack = activeData();
   return intro("Practice exams","Choose an exam format and practice with questions from your study pack.",
     button("Question bank","questions","outline","notes") + button("Generate study pack","generate","primary","spark")) +
-    (pack?.sample ? '<p class="notice">Try the sample exams while you connect Gemini or add your own material.</p>' : '') +
+    (pack?.sample ? '<p class="notice">Try the sample exams or add your own study material.</p>' : '') +
     modeTiles() + (data.history.length ? '<section class="section"><div class="section-head"><h2>Recent sessions</h2></div><div class="stack">' +
       data.history.slice(0, 8).map((result) => '<article class="resource row"><div class="resource-name">' +
       toolIcon(modes[result.mode].icon, modes[result.mode].color) + '<div><strong>' + modes[result.mode].title + '</strong><p class="subtle">' +
@@ -432,8 +454,9 @@ function exam() {
     (oral ? '<div class="actions">' + ("speechSynthesis" in window ? button("Read question","speak","outline","volume") : "") +
       (recording ? button("Stop and transcribe","record","recording","stop") :
         audioBusy ? '<span class="notice" role="status"><span class="busy"></span> ' + (mic.stage === "requesting" ? "Waiting for microphone…" : "Transcribing…") + '</span>' :
-        connected() && navigator.mediaDevices?.getUserMedia && "MediaRecorder" in window && !current.pending ? button("Record answer","record","outline","mic") : "") + '</div>' +
-      (!connected() ? '<p class="subtle draft">Connect Gemini in Settings to record and transcribe your answer. You can type it here.</p>' : '') : '') +
+        connected() && activeProvider().audio && navigator.mediaDevices?.getUserMedia && "MediaRecorder" in window && !current.pending ? button("Record answer","record","outline","mic") : "") + '</div>' +
+      (!activeProvider().audio ? '<p class="subtle draft">Type your answer to get feedback from Claude. To record, choose Gemini or OpenAI in AI settings.</p>' :
+        !connected() ? '<p class="subtle draft">Connect an API key in AI settings to record and transcribe your answer. You can type it here.</p>' : '') : '') +
     '<form data-form="answer">' +
     (current.mode === "quiz" ? '<div class="choices">' + question.options.map((option, index) =>
       '<label class="choice"><input type="radio" name="choice" value="' + index + '"' + (current.choice === index ? " checked" : "") +
@@ -488,8 +511,8 @@ async function submitAnswer(form) {
     render();
     const allowFollowUp = current.mode === "oral" && !current.followUp;
     try {
-      if (!connected() && !current.sample) throw new Error("Connect Gemini in Settings to evaluate this answer.");
-      feedback = connected() ? await gemini("grade", { attempt:{
+      if (!connected() && !current.sample) throw new Error("Connect an API key in AI settings to evaluate this answer.");
+      feedback = connected() ? await requestAI("grade", { attempt:{
         mode:current.mode, question:question.prompt, modelAnswer:question.answer, rubric:question.rubric,
         sourceExcerpt:question.reference?.excerpt || "", answer:current.followUp ? current.firstAnswer : answer,
         followUpQuestion:current.followUp, followUpAnswer:current.followUp ? answer : "", allowFollowUp,
@@ -611,9 +634,9 @@ async function toggleRecording() {
     render();
     return;
   }
-  if (mic || !connected()) return;
+  if (mic || !connected() || !activeProvider().audio) return;
   window.speechSynthesis?.cancel();
-  const current = { stage:"requesting", session, chunks:[] };
+  const current = { stage:"requesting", session, chunks:[], provider, key:apiKeys[provider] };
   mic = current;
   session.error = "";
   render();
@@ -642,7 +665,9 @@ async function toggleRecording() {
         if (mimeType === "video/webm") mimeType = "audio/webm";
         const blob = new Blob(current.chunks, { type:mimeType });
         if (!blob.size || blob.size > 4_000_000) throw new Error("The recording is empty or too large. Try a shorter answer.");
-        const { transcript } = await gemini("transcribe", { mimeType, data:await blobToBase64(blob) });
+        const recordingData = await blobToBase64(blob);
+        if (mic !== current) return;
+        const { transcript } = await requestAI("transcribe", { mimeType, data:recordingData }, current.provider, current.key);
         if (mic !== current) return;
         if (!transcript.trim()) throw new Error("No clear speech was detected. Try again or type your answer.");
         current.session.draft = [current.session.draft, transcript.trim()].filter(Boolean).join(" ").slice(0, 8000);
@@ -702,7 +727,7 @@ async function generatePack(fields) {
   const payload = await Promise.all(sources.map(async ({ id, name, type, file, text }) =>
     type === "pdf" ? { id, name, type, data:await blobToBase64(file) } : { id, name, type, text }));
   if (new Blob([JSON.stringify(payload)]).size > 14_900_000) throw new Error("This selection is too large. Choose fewer materials.");
-  const result = await gemini("bundle", { sources:payload });
+  const result = await requestAI("bundle", { sources:payload });
   const withIds = (entries) => entries.map((item) => ({ ...item, id:id() }));
   const pack = {
     sample:false, sourceIds:selected, notes:withIds(result.notes), oral:withIds(result.oral),
@@ -745,11 +770,12 @@ async function submitModal(form) {
   try {
     if (kind === "key") {
       const key = fields.get("key").trim();
-      if (!key) throw new Error("Enter a Gemini API key.");
-      const result = await gemini("connect", {}, key);
-      if (result.status !== "ready") throw new Error("Gemini could not confirm the connection.");
-      apiKey = key;
-      message = "Gemini is connected.";
+      if (!key) throw new Error("Enter an API key for " + activeProvider().name + ".");
+      const selected = provider;
+      const result = await requestAI("connect", {}, selected, key);
+      if (result.status !== "ready") throw new Error(aiProviders[selected].name + " could not confirm the connection.");
+      apiKeys[selected] = key;
+      message = aiProviders[selected].name + " is connected.";
     } else if (kind === "upload") {
       message = await submitUpload(form, fields);
       destination = "materials";
@@ -839,7 +865,13 @@ function dispatch(element) {
   switch (action) {
     case "close": if (!modalBusy) modal.close(); break;
     case "settings": settings(); break;
-    case "disconnect": apiKey = ""; modal.close(); render(); notify("Session key disconnected."); break;
+    case "disconnect":
+      cancelMicrophone();
+      delete apiKeys[provider];
+      modal.close();
+      render();
+      notify("Session key disconnected.");
+      break;
     case "upload": uploadDialog(); break;
     case "generate": generateDialog(); break;
     case "choose-files": modalContent.querySelector('[name="files"]').click(); break;
@@ -893,6 +925,20 @@ document.addEventListener("submit", (event) => {
 });
 document.addEventListener("change", (event) => {
   const target = event.target;
+  if (target.name === "provider" && Object.hasOwn(aiProviders, target.value) && target.value !== provider) {
+    cancelMicrophone();
+    providerPicked = true;
+    provider = target.value;
+    if (generateAfterConnecting && connected()) {
+      generateAfterConnecting = false;
+      render();
+      generateDialog();
+      return;
+    }
+    render();
+    settings();
+    modalContent.querySelector('[name="provider"]').focus();
+  }
   if (target.name === "files") updateFiles(target);
   if (target.dataset.status) moveCard(target.dataset.status, target.value);
   if (target.name === "choice" && session) session.choice = Number(target.value);
@@ -950,7 +996,7 @@ if (stored) data = stored;
 render();
 if (!persistenceAvailable) notify("Browser storage is unavailable. Changes will last until this page closes.");
 fetch("/api/config").then((response) => response.json()).then((settings) => {
-  config = settings;
-  document.querySelector("#connection-status").textContent = connected() ? "Connected" : "Connect your API key";
-  document.documentElement.dataset.gemini = connected() ? "connected" : "disconnected";
+  providerConfig = settings.providers || { gemini:settings };
+  if (!providerPicked && !modal.open && Object.hasOwn(aiProviders, settings.defaultProvider)) provider = settings.defaultProvider;
+  renderConnection();
 }).catch(() => {});

@@ -24,9 +24,11 @@ export async function build({ hosted = true } = {}) {
   const server = new URL("dist/server/", root);
   await mkdir(server, { recursive: true });
   const assets = await readAssets();
-  const api = await readFile(new URL("src/api.mjs", root), "utf8");
-  const worker = await readFile(new URL("src/worker.mjs", root), "utf8");
-  await writeFile(new URL("index.js", server), "const assets = " + JSON.stringify(assets) + ";\n" + api + "\n" + worker.replace(/^import .*;\r?\n/gm, ""));
+  const modules = await Promise.all(["providers", "api", "worker"].map(async (name) => {
+    const source = await readFile(new URL("src/" + name + ".mjs", root), "utf8");
+    return source.replace(/^import .*;\r?\n/gm, "");
+  }));
+  await writeFile(new URL("index.js", server), "const assets = " + JSON.stringify(assets) + ";\n" + modules.join("\n"));
   if (hosted) {
     await mkdir(new URL("dist/.openai/", root), { recursive: true });
     await copyFile(new URL(".openai/hosting.json", root), new URL("dist/.openai/hosting.json", root));
