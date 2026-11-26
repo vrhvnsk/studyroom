@@ -148,9 +148,10 @@ function gazePanel() {
   return '<section class="gaze-panel" aria-labelledby="gaze-title" data-gaze-state="off"><div class="gaze-scope" aria-hidden="true"><i></i><b></b></div>' +
     '<div class="gaze-copy"><div class="gaze-heading"><h3 id="gaze-title">Eye tracking</h3><span class="gaze-chip">Camera off</span></div>' +
     '<p class="gaze-message" role="status" aria-live="polite">' + gazeMessages.off + '</p><div class="gaze-progress" aria-hidden="true" hidden><span></span></div>' +
-    '<details class="gaze-privacy"><summary>About camera feedback</summary><p>Camera images are processed on this device and discarded. Your review saves aggregate estimates and a timestamped eye-tracking event log on this device. Looking away is normal and has no effect on your score.</p></details></div>' +
+    '<details class="gaze-privacy"><summary>About camera feedback</summary><p>Camera images are processed on this device and discarded. Only sustained off-track alerts are timestamped and saved on this device. Looking away is normal and has no effect on your score.</p></details></div>' +
     '<div class="gaze-controls"><button type="button" class="button outline" data-action="toggle-gaze">' + icon("camera") + '<span>Turn on camera</span></button>' +
-    '<button type="button" class="button quiet" data-action="recalibrate-gaze" hidden>' + icon("focus") + 'Recalibrate</button></div></section>';
+    '<button type="button" class="button quiet" data-action="recalibrate-gaze" hidden>' + icon("focus") + 'Recalibrate</button></div>' +
+    '<div class="gaze-event-log"><strong>Off-track log</strong><ol class="gaze-event-list" aria-live="polite" aria-relevant="additions"><li class="gaze-log-empty">No off-track events.</li></ol></div></section>';
 }
 
 function paintGaze() {
@@ -174,6 +175,10 @@ function paintGaze() {
   const offset = (value) => Math.max(-23, Math.min(23, (value || 0) * 38)) + "px";
   scope.style.setProperty("--gaze-x", offset(-x));
   scope.style.setProperty("--gaze-y", offset(y));
+  const events = session.gaze.events();
+  panel.querySelector(".gaze-event-list").innerHTML = events.length ? events.map(({ action, at }) =>
+    '<li><time datetime="' + html(at) + '">' + html(new Date(at).toLocaleTimeString()) + '</time> ' + html(action) + '</li>').join("") :
+    '<li class="gaze-log-empty">No off-track events.</li>';
 }
 
 function stopGaze(update = true) {
@@ -181,7 +186,6 @@ function stopGaze(update = true) {
   const camera = gazeCamera;
   gazeCamera = null;
   camera.stop();
-  session?.gaze?.logAction("Eye tracking stopped");
   if (update && session?.gaze) {
     session.gazeView = { status:"paused" };
     paintGaze();
@@ -192,12 +196,10 @@ function toggleGaze() {
   if (gazeCamera) { stopGaze(); return; }
   const current = session;
   if (!current?.gaze || document.hidden) return;
-  current.gaze.logAction("Eye tracking start requested");
-  current.gaze.recalibrate("Calibration started");
+  current.gaze.recalibrate();
   const camera = startGazeCamera({
     onState(status) {
       if (gazeCamera !== camera) return;
-      if (status === "ready") current.gaze.logAction("Eye tracking started");
       current.gazeView = { status:status === "ready" ? "calibrating" : status };
       paintGaze();
     },
@@ -209,7 +211,6 @@ function toggleGaze() {
     onError(error) {
       if (gazeCamera !== camera) return;
       gazeCamera = null;
-      current.gaze.logAction("Eye tracking failed: " + error);
       current.gazeView = { status:"error", error };
       paintGaze();
       notify(error);
@@ -226,7 +227,7 @@ function gazeReview(summary) {
     '<dl class="gaze-metrics"><div><dt>Near camera baseline</dt><dd>' + summary.nearPercent + '%</dd></div>' +
     '<div><dt>Usable camera time</dt><dd>' + summary.trackedSeconds + ' s</dd></div>' +
     '<div><dt>Usable sample coverage</dt><dd>' + summary.coverage + '%</dd></div></dl>';
-  const events = summary.events?.length ? '<details class="gaze-event-log"><summary>Eye-tracking event log (' + summary.events.length + ')</summary><ol>' +
+  const events = summary.events?.length ? '<details class="gaze-event-log"><summary>Off-track events (' + summary.events.length + ')</summary><ol>' +
     summary.events.map(({ action, at }) => '<li><time datetime="' + html(at) + '">' +
       html(new Date(at).toLocaleTimeString()) + '</time> ' + html(action) + '</li>').join("") + '</ol></details>' : "";
   return '<section class="panel gaze-review"><div class="resource-name">' + toolIcon("eye","blue") +

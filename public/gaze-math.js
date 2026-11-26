@@ -65,26 +65,13 @@ export function createGazeSession() {
   let untrackedMs = 0;
   let awaySince;
   let alertActive = false;
-  const actionLog = [];
-
-  function logAction(action) {
-    actionLog.push({ action, at:new Date().toISOString() });
-  }
-
-  function clearAlert(action) {
-    if (!alertActive) return;
-    alertActive = false;
-    logAction(action);
-  }
+  const offTrackEvents = [];
 
   return {
-    logAction,
     events() {
-      return actionLog.map(({ action, at }) => ({ action, at }));
+      return offTrackEvents.map(({ action, at }) => ({ action, at }));
     },
-    recalibrate(action = "Recalibration started") {
-      clearAlert("Out-of-range alert cleared by recalibration");
-      logAction(action);
+    recalibrate() {
       baseline = undefined;
       samples = [];
       calibrationStarted = undefined;
@@ -92,6 +79,7 @@ export function createGazeSession() {
       smoothed = undefined;
       current = undefined;
       awaySince = undefined;
+      alertActive = false;
     },
     sample(point, time) {
       if (!baseline) {
@@ -112,7 +100,6 @@ export function createGazeSession() {
         baseline = { x:mean(samples, "x"), y:mean(samples, "y") };
         samples = [];
         previousTime = undefined;
-        logAction("Calibration completed");
       }
       const gap = previousTime === undefined ? 0 : time - previousTime;
       previousTime = time;
@@ -121,14 +108,14 @@ export function createGazeSession() {
       if (!continuous) {
         smoothed = undefined;
         awaySince = undefined;
-        clearAlert("Out-of-range alert cleared because tracking was interrupted");
+        alertActive = false;
       }
       if (!point) {
         smoothed = undefined;
         current = undefined;
         awaySince = undefined;
         untrackedMs += elapsed;
-        clearAlert("Out-of-range alert cleared because gaze became unavailable");
+        alertActive = false;
         return { status:"unavailable", progress:100 };
       }
       const offset = { x:point.x - baseline.x, y:point.y - baseline.y };
@@ -140,12 +127,15 @@ export function createGazeSession() {
       if (current === "near") {
         nearMs += elapsed;
         awaySince = undefined;
-        clearAlert("Out-of-range alert cleared");
+        alertActive = false;
       } else {
         if (!continuous || awaySince === undefined) awaySince = time;
         if (!alertActive && time - awaySince > OUT_OF_RANGE_MS) {
           alertActive = true;
-          logAction("Red alert activated: gaze remained outside the allowed area for more than 2 seconds");
+          offTrackEvents.push({
+            action:"Gaze out of the allowed area for more than 2 seconds",
+            at:new Date().toISOString(),
+          });
         }
       }
       return { status:alertActive ? "alert" : current, progress:100, x:smoothed.x, y:smoothed.y };

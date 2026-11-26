@@ -65,14 +65,15 @@ test("the allowed area is smaller and a continuous excursion triggers a red aler
   assert.equal(signal.sample(outside, 2_100).status, "near");
   assert.equal(signal.sample(outside, 2_250).status, "near");
   assert.equal(signal.sample(outside, 2_400).status, "away");
+  assert.deepEqual(signal.events(), []);
   for (let time = 2_550; time <= 4_350; time += 150) assert.equal(signal.sample(outside, time).status, "away");
   assert.equal(signal.sample(outside, 4_400).status, "away");
   assert.equal(signal.sample(outside, 4_500).status, "alert");
   assert.equal(signal.sample(center, 4_650).status, "near");
 
   const events = signal.events();
-  assert.equal(events.filter(({ action }) => action.startsWith("Red alert activated:")).length, 1);
-  assert.equal(events.filter(({ action }) => action === "Out-of-range alert cleared").length, 1);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].action, "Gaze out of the allowed area for more than 2 seconds");
   assert.ok(events.every(({ at }) => !Number.isNaN(Date.parse(at))));
 });
 
@@ -85,5 +86,6 @@ test("tracking interruptions clear the alert timer instead of counting missing s
   signal.sample(outside, 1_800);
   signal.sample(outside, 2_250);
   for (let time = 2_400; time <= 4_200; time += 150) assert.equal(signal.sample(outside, time).status, "away");
+  assert.deepEqual(signal.events(), []);
   assert.equal(signal.sample(outside, 4_350).status, "alert");
 });

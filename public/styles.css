@@ -34,7 +34,11 @@ body{background:radial-gradient(ellipse at 76% 0,#eef3fc 0,transparent 52%),var(
 .gaze-panel[data-gaze-state=alert] .gaze-scope b{background:#ff4d4d;box-shadow:0 0 17px #ff3030}
 .gaze-panel[data-gaze-state=alert] .gaze-chip{color:#ffe0e0;background:#642d34;border-color:#ef6666}
 .gaze-panel[data-gaze-state=alert] .gaze-message{color:#ffd0d0}
-.gaze-event-log{margin-top:14px;color:var(--muted);font-size:14px}
+.gaze-event-log{grid-column:1/-1;margin-top:0;color:#c3d3e9;font-size:14px}
+.gaze-event-log strong{font-size:13px}
 .gaze-event-log summary{cursor:pointer}
-.gaze-event-log ol{display:grid;gap:6px;padding-left:22px}
+.gaze-event-log ol{display:grid;gap:6px;padding-left:22px;margin:6px 0 0}
+.gaze-event-list{grid-column:1/-1;margin-top:0;color:#c3d3e9;font-size:13px}
+.gaze-event-list li{margin-top:5px}
+.gaze-log-empty{list-style:none;margin-left:-22px;color:#aabbd0}
 .gaze-event-log time{font-variant-numeric:tabular-nums}
