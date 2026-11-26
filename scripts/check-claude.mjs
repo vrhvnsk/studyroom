@@ -7,7 +7,7 @@ import { sampleWorkspace } from "../public/demo.js";
 let key = process.env.ANTHROPIC_API_KEY?.trim();
 if (!key) {
   const prompt = createInterface({ input: process.stdin, output: process.stdout });
-  key = (await prompt.question("Paste your Claude API key and press Enter: ")).trim();
+  key = (await prompt.question("Paste your Anthropic API key and press Enter: ")).trim();
   prompt.close();
   process.stdout.write("\x1b[1A\x1b[2K");
 }
@@ -32,7 +32,7 @@ const expectOk = async (response) => {
   return body;
 };
 
-console.log("Studyroom Claude check (" + (env.CLAUDE_MODEL || "claude-opus-5-5") + ")\n");
+console.log("Studyroom Anthropic API check (" + (env.CLAUDE_MODEL || "claude-opus-5-5") + ")\n");
 await step("1. Key check", async () => { await expectOk(await call({ action: "connect" })); });
 await step("2. Grading an answer", async () => {
   const question = pack.oral[0];

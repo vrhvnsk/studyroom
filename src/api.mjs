@@ -145,31 +145,31 @@ function verifyReferences(result, sources) {
   for (const item of Object.values(result).flat()) {
     const ref = item.reference;
     const source = sources.find((entry) => entry.id === ref.sourceId);
-    if (!source) throw new Error("Claude returned a source reference that could not be matched. Try generating again.");
+    if (!source) throw new Error("The AI provider returned a source reference that could not be matched. Try generating again.");
     ref.page = source.type === "pdf" && ref.page > 0 ? ref.page : 0;
     const normalize = (value) => value.replace(/\s+/g, " ").trim();
     if (source.type === "text" && !normalize(source.text).includes(normalize(ref.excerpt))) ref.excerpt = "";
   }
   for (const entry of result.quiz) {
-    if (new Set(entry.options.map((option) => option.trim().toLowerCase())).size !== 4) throw new Error("Claude returned duplicate answer choices. Try generating again.");
+    if (new Set(entry.options.map((option) => option.trim().toLowerCase())).size !== 4) throw new Error("The AI provider returned duplicate answer choices. Try generating again.");
   }
 }
 
 const upstreamMessages = {
-  400: "Claude rejected the request.",
-  401: "Claude could not authenticate this API key.",
-  403: "This API key can’t use the configured Claude model.",
-  404: "The configured Claude model is unavailable for this key.",
-  413: "This request is too large for Claude. Choose fewer or smaller materials.",
-  429: "You’ve hit Claude’s rate limit. Wait a moment and try again.",
-  529: "Claude is overloaded right now. Try again in a moment.",
+  400: "Anthropic rejected the request.",
+  401: "Anthropic could not authenticate this API key.",
+  403: "This API key can’t use the configured Anthropic model.",
+  404: "The configured Anthropic model is unavailable for this key.",
+  413: "This request is too large for the AI provider. Choose fewer or smaller materials.",
+  429: "You’ve hit the Anthropic API rate limit. Wait a moment and try again.",
+  529: "The AI provider is overloaded right now. Try again in a moment.",
 };
 async function upstreamError(response, label) {
   let detail = "";
   try { detail = String((await response.json())?.error?.message || "").slice(0, 300); } catch {}
   console.error("Claude " + label + " request failed with status " + response.status + (detail ? ": " + detail : ""));
-  const message = upstreamMessages[response.status] || "Claude is temporarily unavailable. Try again.";
-  return json({ error: detail ? message + " Claude said: " + detail : message }, response.status);
+  const message = upstreamMessages[response.status] || "The AI provider is temporarily unavailable. Try again.";
+  return json({ error: detail ? message + " Anthropic said: " + detail : message }, response.status);
 }
 const headers = (key) => ({ "Content-Type": "application/json", "x-api-key": key, "anthropic-version": ANTHROPIC_VERSION });
 
@@ -192,12 +192,12 @@ export async function api(httpRequest, env = {}, upstreamFetch = fetch, { retryD
     if (body.action !== "connect") prompt = request(body.action, body);
   } catch (error) { return json({ error: error.message }, 400); }
   const key = httpRequest.headers.get("x-studyroom-key") || env.ANTHROPIC_API_KEY;
-  if (!key) return json({ error: "Connect a Claude API key in Settings first." }, 401);
+  if (!key) return json({ error: "Connect an Anthropic API key in Gemini settings first." }, 401);
 
   if (body.action === "connect") {
     let response;
     try { response = await upstreamFetch(ANTHROPIC + "models?limit=1", { headers: headers(key), signal: AbortSignal.timeout(20_000) }); }
-    catch { return json({ error: "Studyroom could not reach Claude. Check your connection and try again." }, 502); }
+    catch { return json({ error: "Studyroom could not reach Anthropic. Check your connection and try again." }, 502); }
     if (!response.ok) return upstreamError(response, "connect");
     await response.body?.cancel().catch(() => {});
     return json({ status: "ready" });
@@ -224,7 +224,7 @@ export async function api(httpRequest, env = {}, upstreamFetch = fetch, { retryD
         signal: AbortSignal.timeout(timeout),
       });
     } catch {
-      return json({ error: "Studyroom could not reach Claude. Check your connection and try again." }, 502);
+      return json({ error: "Studyroom could not reach Anthropic. Check your connection and try again." }, 502);
     }
     if (!BUSY_STATUSES.has(response.status) || attempt) break;
     console.warn("Claude " + body.action + " is busy (status " + response.status + "), retrying.");
@@ -234,17 +234,17 @@ export async function api(httpRequest, env = {}, upstreamFetch = fetch, { retryD
 
   try {
     const message = await response.json();
-    if (message.stop_reason === "refusal") throw new Error("Claude declined to answer this request. Try rephrasing or using different material.");
-    if (message.stop_reason === "max_tokens") throw new Error("Claude’s answer was cut off. Try again with fewer materials.");
+    if (message.stop_reason === "refusal") throw new Error("The AI provider declined to answer this request. Try rephrasing or using different material.");
+    if (message.stop_reason === "max_tokens") throw new Error("The AI response was cut off. Try again with fewer materials.");
     const result = JSON.parse(message.content.filter((block) => block.type === "text").map((block) => block.text).join(""));
-    if (!matches(result, schemas[body.action])) throw new Error("Claude returned an incomplete result. Try again.");
+    if (!matches(result, schemas[body.action])) throw new Error("The AI provider returned an incomplete result. Try again.");
     if (body.action === "bundle") verifyReferences(result, body.sources);
     if (body.action === "examine") {
-      if (!result.say.trim()) throw new Error("Claude returned an empty reply. Try again.");
+      if (!result.say.trim()) throw new Error("The AI provider returned an empty reply. Try again.");
       if (body.event === "start" || body.event === "resume") result.advance = false;
     }
     return json(result);
   } catch (error) {
-    return json({ error: error instanceof SyntaxError ? "Claude did not return a complete result. Try again." : error.message }, 502);
+    return json({ error: error instanceof SyntaxError ? "The AI provider did not return a complete result. Try again." : error.message }, 502);
   }
 }

@@ -105,8 +105,8 @@ async function post(path, payload, key = apiKey) {
   const response = await fetch(path, { method:"POST", headers, body:JSON.stringify(payload) });
   let result;
   try { result = await response.json(); }
-  catch { throw new Error("Studyroom could not reach Claude. Try again."); }
-  if (!response.ok) throw new Error(result.error || "Claude is temporarily unavailable.");
+  catch { throw new Error("Studyroom could not reach the AI provider. Try again."); }
+  if (!response.ok) throw new Error(result.error || "The AI provider is temporarily unavailable.");
   return result;
 }
 
@@ -136,10 +136,10 @@ function busyForm(form, busy, label = "") {
 
 const alertBox = '<p class="notice error" role="alert" hidden></p>';
 const formEnd = (label) => alertBox + '<div class="modal-actions">' + button("Cancel","close") + '<button class="button primary" type="submit">' + label + '</button></div></form>';
-const settings = () => showDialog("Claude settings", "Connect a Claude API key to generate study packs, grade answers, and run spoken exams.",
-  '<form data-form="key"><label class="field">Claude API key<input name="key" type="password" autocomplete="off" placeholder="sk-ant-…" required maxlength="300"></label>' +
-  '<p class="subtle">Your key stays in memory until you reload or disconnect. Materials and answers are sent to Anthropic when you ask Claude to process them.</p>' +
-  '<p class="subtle inline-ref">Model ' + html(config.model) + ' · <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Get an API key</a></p>' +
+const settings = () => showDialog("Gemini settings", "Connect an Anthropic API key to generate study packs, grade answers, and run spoken exams.",
+  '<form data-form="key"><label class="field">Anthropic API key<input name="key" type="password" autocomplete="off" placeholder="sk-ant-…" required maxlength="300"></label>' +
+  '<p class="subtle">Your key stays in memory until you reload or disconnect. Anthropic processes the materials and answers you submit to these study tools.</p>' +
+  '<p class="subtle inline-ref">Model ' + html(config.model) + ' · <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Get an Anthropic API key</a></p>' +
   (connected() ? '<p class="notice">' + (apiKey ? 'A session key is connected.' : 'A server key is configured.') + '</p>' : '') +
   (apiKey ? button("Disconnect session key","disconnect","quiet") : '') + formEnd("Connect key"));
 
@@ -271,7 +271,7 @@ function generateDialog() {
   if (!activeSources().length) { uploadDialog(); return; }
   if (!connected()) { generateAfterConnecting = true; settings(); return; }
   const sources = activeSources();
-  showDialog("Generate a study pack","Select the materials Claude should turn into notes, practice questions, and studyboard topics.",
+  showDialog("Generate a study pack","Select the materials to turn into notes, practice questions, and studyboard topics.",
     '<form data-form="generate"><div class="stack">' + sources.map((source, index) =>
       '<label class="choice"><input type="checkbox" name="sources" value="' + html(source.id) + '"' +
       (sources.length <= 8 || index === 0 ? ' checked' : '') + '>' + html(source.name) + '</label>').join("") + '</div>' +
@@ -294,7 +294,7 @@ function overview() {
   const pack = activeData();
   const spotlight = own.at(-1) || data.sources[0];
   const counts = pack ? pack.oral.length + pack.written.length + pack.quiz.length : 0;
-  return '<section class="hero"><div class="hero-copy"><span class="hero-label">' + icon("spark") + (pack?.sample ? 'Sample pack loaded' : pack ? 'Study pack ready' : 'Claude study workspace') + '</span>' +
+  return '<section class="hero"><div class="hero-copy"><span class="hero-label">' + icon("spark") + (pack?.sample ? 'Sample pack loaded' : pack ? 'Study pack ready' : 'Gemini study workspace') + '</span>' +
     '<h1>Study to <em>remember.</em></h1><p>Turn your study materials into clear notes, interactive practice exams, and a plan for what to review next.</p><div class="actions">' +
     button("Add study material","upload","primary","plus") + (own.length ? button("Generate study pack","generate","outline","spark") : button(pack?.sample ? "Try a sample exam" : "Start practice","start:quiz","outline","bolt")) +
     '</div></div><div class="hero-art" aria-hidden="true"><div class="hero-grid"></div><div class="orbit"></div><div class="orbit inner"></div><div class="orbit outer"></div>' +
@@ -312,7 +312,7 @@ function overview() {
 }
 
 function materials() {
-  return intro("Materials","Manage the source documents Claude uses to build your study pack.",
+  return intro("Materials","Manage the source documents for your study pack.",
     button("Add study material","upload","primary","plus") + button("Generate study pack","generate","outline","spark")) +
     '<div class="stack">' + data.sources.map((source) => '<article class="resource row"><div class="resource-name">' +
       toolIcon(source.type === "pdf" ? "notes" : "book", source.sample ? "purple" : "") + '<div><strong>' + html(source.name) + '</strong><p class="subtle">' +
@@ -389,7 +389,7 @@ function practice() {
   const pack = activeData();
   return intro("Practice exams","Choose an exam format and practice with questions from your study pack.",
     button("Question bank","questions","outline","notes") + button("Generate study pack","generate","primary","spark")) +
-    (pack?.sample ? '<p class="notice">Try the sample exams while you connect Claude or add your own material.</p>' : '') +
+    (pack?.sample ? '<p class="notice">Try the sample exams, add your own material, or connect a key in Gemini settings.</p>' : '') +
     modeTiles() + (data.history.length ? '<section class="section"><div class="section-head"><h2>Recent sessions</h2></div><div class="stack">' +
       data.history.slice(0, 8).map((result) => '<article class="resource row"><div class="resource-name">' +
       toolIcon(modes[result.mode].icon, modes[result.mode].color) + '<div><strong>' + modes[result.mode].title + (result.live ? ' · ' + html(result.live.name) : '') + '</strong><p class="subtle">' +
@@ -435,11 +435,11 @@ function oralDialog(retry) {
     '<form data-form="oral-setup"><fieldset class="persona-list"><legend>Spoken conversation</legend>' +
     (live ? config.personas.map((persona) => '<label class="choice persona"><input type="radio" name="style" value="' + html(persona.id) + '"' +
       (persona.id === preferred ? ' checked' : '') + ' required><span class="persona-mark" aria-hidden="true">' + html(personaMark(persona)) + '</span><span><strong>' + html(persona.name) + '</strong><span class="subtle">' + html(persona.description) + '</span></span></label>').join("") :
-      '<p class="notice">Connect a Claude API key in Settings to talk with an examiner.</p>') +
+      '<p class="notice">Connect an Anthropic API key in Gemini settings to talk with an examiner.</p>') +
     '</fieldset><fieldset class="persona-list"><legend>Classic</legend><label class="choice persona"><input type="radio" name="style" value="classic"' + (live ? '' : ' checked') +
     ' required><span class="persona-mark" aria-hidden="true">' + icon("pen") + '</span><span><strong>One question at a time</strong><span class="subtle">Dictate or type each answer and edit it before you submit.</span></span></label></fieldset>' +
     '<p class="subtle">' + (canListen ? 'Your browser turns your speech into text, which in Chrome uses Google’s speech service. ' : 'This browser can’t recognize speech, so you’ll type your answers while the examiner speaks. ') +
-    'Claude writes the examiner’s replies, and your browser reads them aloud. Your score never depends on the examiner’s personality.</p>' + formEnd("Start exam"));
+    'The AI examiner writes replies, and your browser reads them aloud. Your score never depends on the examiner’s personality.</p>' + formEnd("Start exam"));
 }
 
 function startOral(form) {
@@ -774,7 +774,7 @@ async function submitAnswer(form) {
     render();
     const allowFollowUp = current.mode === "oral" && !current.followUp;
     try {
-      if (!connected() && !current.sample) throw new Error("Connect Claude in Settings to evaluate this answer.");
+      if (!connected() && !current.sample) throw new Error("Connect your API key in Gemini settings to evaluate this answer.");
       feedback = connected() ? await ai("grade", { attempt:{
         mode:current.mode, question:question.prompt, modelAnswer:question.answer, rubric:question.rubric,
         sourceExcerpt:question.reference?.excerpt || "", answer:current.followUp ? current.firstAnswer : answer,
@@ -997,11 +997,11 @@ async function submitModal(form) {
   try {
     if (kind === "key") {
       const key = fields.get("key").trim();
-      if (!key) throw new Error("Enter a Claude API key.");
+      if (!key) throw new Error("Enter an Anthropic API key.");
       const result = await ai("connect", {}, key);
-      if (result.status !== "ready") throw new Error("Claude could not confirm the connection.");
+      if (result.status !== "ready") throw new Error("Anthropic could not confirm the connection.");
       apiKey = key;
-      message = "Claude is connected.";
+      message = "Your API key is connected.";
     } else if (kind === "upload") {
       message = await submitUpload(form, fields);
       destination = "materials";

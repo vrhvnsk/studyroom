@@ -89,7 +89,7 @@ test("an overloaded API is retried once and Claude's own error text is passed th
   const broke = await api(request({ action: "grade", attempt: { answer: "Recall" } }), { ANTHROPIC_API_KEY: "test" },
     async () => Response.json({ type: "error", error: { type: "invalid_request_error", message: "Your credit balance is too low." } }, { status: 400 }), { retryDelay: 0 });
   assert.equal(broke.status, 400);
-  assert.match((await broke.json()).error, /Claude said: Your credit balance is too low/);
+  assert.match((await broke.json()).error, /Anthropic said: Your credit balance is too low/);
 });
 
 test("refusals and cut-off answers become clear errors", async () => {
