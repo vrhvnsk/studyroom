@@ -10,25 +10,35 @@ Use Node.js 22 or newer. No dependencies are required.
 npm run dev
 ```
 
-Open [Studyroom](http://127.0.0.1:4173) and choose **AI settings**. Pick a provider, enter its API key, and click **Connect key**. Keys entered in the app stay in page memory until you disconnect or reload.
+Open [Studyroom](http://127.0.0.1:4173) and choose **Claude settings** to connect a [Claude API key](https://console.anthropic.com/settings/keys). The key stays in page memory until a disconnect or reload. For a private local or hosted installation, you can set `ANTHROPIC_API_KEY` in a local `.env` file or in the hosting environment. The default model is `claude-opus-5-5`; override it with `CLAUDE_MODEL`. Requests opt into Claude's server-side refusal fallback, and an overloaded API is retried once.
 
-| Provider | Default model | Server key | Model override |
-| --- | --- | --- | --- |
-| [Google Gemini](https://aistudio.google.com/api-keys) | `gemini-3.8-flash` | `GEMINI_API_KEY` | `GEMINI_MODEL` |
-| [OpenAI](https://platform.openai.com/api-keys) | `gpt-6-luna` | `OPENAI_API_KEY` | `OPENAI_MODEL` |
-| [Anthropic Claude](https://platform.claude.com/settings/keys) | `claude-haiku-5-5` | `ANTHROPIC_API_KEY` | `ANTHROPIC_MODEL` |
+To check a key against every Claude path the app uses, run `npm run check`. It asks for the key, or reads `ANTHROPIC_API_KEY`, and never prints it.
 
-For a private local installation, copy `.env.example` to `.env` and set the keys you want the server to use. Use `AI_PROVIDER=gemini`, `openai`, or `anthropic` to set the startup choice. Model overrides need PDF input and structured output. Gemini also uses its low thinking level and handles its own audio. OpenAI uses `gpt-transcribe` for audio, configurable with `OPENAI_TRANSCRIPTION_MODEL`.
+The bundled sample pack works without a key. Its oral and written feedback uses simple keyword matching. Generated packs, grading, and spoken examiners use Claude. In the classic oral exam you can dictate each answer with your browser's speech recognition, edit it, and submit it. The question can be read aloud using browser speech synthesis.
 
-The sample pack works without a key. Its oral and written feedback uses simple keyword matching. All three providers handle generation, written grading, and oral follow-ups. Gemini and OpenAI can transcribe recordings up to 90 seconds per answer. With Claude, type the answer or transcript. The browser can read questions aloud with any provider.
+The browser stores materials, generated packs, board changes, and completed exams in IndexedDB. Claude requests send selected sources or submitted answers to Anthropic as needed. The app has no database-backed sync. Each generation supports up to eight materials, 10 MiB of PDFs combined, and an overall request size limit. Generated PDF citations are model suggestions.
 
-The browser stores materials, generated packs, board changes, and completed exams in IndexedDB. Live AI requests send the relevant data to the selected provider. Each generation supports up to eight materials, 10 MiB of PDFs combined, and an overall request size limit. Generated PDF citations are model suggestions.
+## Spoken oral exams
+
+When Claude is connected, starting an oral exam lets you pick a spoken examiner or the classic one-question-at-a-time flow. In a spoken exam the examiner asks each question in character, listens to your answer, and asks up to two follow-ups before moving on.
+
+| Examiner | Style | Voice style |
+| --- | --- | --- |
+| Warm mentor | Patient and encouraging | Gentle, slightly slower |
+| Strict professor | Formal, presses for precise terms | Low and measured |
+| Socratic coach | Answers with probing questions | Calm and even |
+| Game-show host | High energy and playful | Fast and bright |
+| Study buddy | A relaxed classmate | Casual and quick |
+
+Each turn goes to Claude at `/api/ai` (`examine`), which returns the examiner's next line, whether to move on, and the language being spoken. The server keeps the persona prompts, so the browser only names the examiner. Your browser reads each line aloud with an installed voice chosen for that examiner, preferring natural or online voices, and then listens with its speech recognition until you pause. You can say **Done speaking**, type instead, interrupt, repeat the last line, skip, or pause and resume. Speech recognition works best in Chrome or Edge, which send the audio to their own speech service. In a browser without it, you type your answers while the examiner still speaks.
+
+When the examiner moves on, Studyroom grades that question from its transcript. The grader scores only what you said, so the examiner's personality and hints never change your score. The session review shows each conversation alongside the feedback.
 
 ## Oral exam eye tracking
 
-Eye tracking starts off in every oral exam. Choose **Turn on camera**, allow camera access, and hold your gaze on the webcam to calibrate. The moving dot shows approximate gaze relative to your camera baseline. The allowed area around that baseline is intentionally small; if gaze remains outside it for more than two seconds, the tracker shows a red alert. If your setup changes, choose **Recalibrate**. You can turn the camera off at any time.
+Eye tracking starts off in every oral exam. Choose **Turn on camera**, allow camera access, and hold your gaze on the webcam to calibrate. The moving dot shows approximate gaze relative to your camera baseline. If your setup changes, choose **Recalibrate**. You can turn the camera off at any time.
 
-The browser downloads the pinned [MediaPipe Face Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker?tab=Web) and runs it locally in a dedicated worker. Studyroom discards camera frames and shows timestamped off-track alerts as they occur. These alerts are saved in the completed session's local review. Gaze is a rehearsal aid and is independent of the AI provider and exam scores. Camera access requires HTTPS or localhost and a browser with the required webcam, worker, and graphics APIs.
+The browser downloads the pinned [MediaPipe Face Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker?tab=Web) and runs it locally in a dedicated worker. Studyroom discards frames and saves only aggregate results in the completed session's local review. Gaze is a rehearsal aid and is independent of Claude and exam scores. Camera access requires HTTPS or localhost and a browser with the required webcam, worker, and graphics APIs.
 
 ## Verify and build
 
@@ -37,4 +47,4 @@ npm test
 npm run build
 ```
 
-The build generates the Sites Worker entry point at `dist/server/index.js`. The tests exercise provider requests with simulated upstream responses.
+The build generates the Sites Worker entry point at `dist/server/index.js`. The tests exercise the Claude request paths with simulated upstream responses.

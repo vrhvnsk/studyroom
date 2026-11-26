@@ -2,6 +2,8 @@ import { sampleWorkspace } from "./demo.js";
 import { loadWorkspace, saveWorkspace } from "./storage.js";
 import { createGazeSession } from "./gaze-math.js";
 import { startGazeCamera } from "./gaze.js";
+import { canListen, canSpeak, dictate, listen, pickVoice, speak } from "./voice.js";
+import { createLiveTranscript, liveAttempt } from "./live-state.js";
 
 const paths = {
   brand:"M4 16 12 4l8 12M7 16l5-7 5 7M4 20h16",
@@ -27,6 +29,9 @@ const paths = {
   eye:"M2 12s3.7-6 10-6 10 6 10 6-3.7 6-10 6-10-6-10-6zm13 0a3 3 0 1 0-6 0 3 3 0 0 0 6 0z",
   focus:"M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5M12 8v8m-4-4h8",
   camera:"M4 6h11a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1zm12 4 5-3v10l-5-3",
+  phone:"M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2",
+  micOff:"m3 3 18 18M9 9v2a3 3 0 0 0 5.1 2.1M15 9.3V5a3 3 0 0 0-5.7-1.3M5 11a7 7 0 0 0 11.9 5M19 11a7 7 0 0 1-.6 2.8M12 18v4m-4 0h8",
+  skip:"m5 4 10 8-10 8zM19 5v14",
 };
 const icon = (name) => '<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="' + paths[name] + '"/></svg>';
 const main = document.querySelector("main");
@@ -34,17 +39,12 @@ const modal = document.querySelector("#modal");
 const modalContent = document.querySelector("#dialog-content");
 const toastElement = document.querySelector("#toast");
 const modes = {
-  oral: { title:"Oral exam", icon:"mic", color:"purple", description:"Speak your answers, get follow-ups, and rehearse with optional eye tracking." },
+  oral: { title:"Oral exam", icon:"mic", color:"purple", description:"Talk it through with a spoken examiner, or answer one question at a time." },
   written: { title:"Written exam", icon:"pen", color:"sand", description:"Write structured answers and review rubric feedback." },
   quiz: { title:"Multiple choice", icon:"list", color:"blue", description:"Test your recall with an interactive quiz." },
 };
 const pages = { overview:"Overview", materials:"Materials", practice:"Practice exams", notes:"Notes", board:"Studyboard" };
 const statuses = { todo:"To study", review:"Reviewing", done:"Mastered" };
-const aiProviders = {
-  gemini:{ name:"Gemini", option:"Google Gemini", url:"https://aistudio.google.com/api-keys", audio:true },
-  openai:{ name:"OpenAI", option:"OpenAI GPT", url:"https://platform.openai.com/api-keys", audio:true },
-  anthropic:{ name:"Claude", option:"Anthropic Claude", url:"https://platform.claude.com/settings/keys", audio:false },
-};
 const maxPdf = 10 * 1024 * 1024;
 const maxText = 150_000;
 const html = (value = "") => String(value).replace(/[&<>"']/g, (character) => ({
@@ -55,21 +55,18 @@ const button = (label, action, style = "outline", glyph = "") => '<button type="
 const badge = (label, neutral = false) => '<span class="status' + (neutral ? ' neutral' : '') + '">' + html(label) + '</span>';
 const toolIcon = (glyph, color = "") => '<span class="tool-icon ' + color + '">' + icon(glyph) + '</span>';
 const formatDate = (date) => new Intl.DateTimeFormat(undefined, { month:"short", day:"numeric" }).format(new Date(date));
-const activeProvider = () => aiProviders[provider];
-const connected = () => Boolean(apiKeys[provider] || providerConfig[provider]?.serverKey);
+const connected = () => Boolean(apiKey || config.serverKey);
 const activeData = () => data.pack;
 const activeSources = () => data.sources.filter((source) => !source.sample);
 const route = () => Object.hasOwn(pages, location.hash.slice(1)) ? location.hash.slice(1) : "overview";
 
 let data = sampleWorkspace();
-let providerConfig = {};
-let provider = "gemini";
-let providerPicked = false;
-const apiKeys = {};
+let config = { serverKey:false, model:"claude-opus-5-5", personas:[] };
+let apiKey = "";
 let screen = route();
 let session = null;
 let report = null;
-let mic = null;
+let dictation = null;
 let gazeCamera = null;
 let toastTimer;
 let pdfUrl;
@@ -78,6 +75,8 @@ let generateAfterConnecting = false;
 let persistenceAvailable = true;
 let saving = Promise.resolve();
 let dragged = "";
+let liveAudio = null;
+let pendingRetry = null;
 
 function notify(message) {
   toastElement.textContent = message;
@@ -96,15 +95,18 @@ function persist() {
   return saving;
 }
 
-async function requestAI(action, payload = {}, selected = provider, key = apiKeys[selected]) {
+function ai(action, payload = {}, key = apiKey) {
+  return post("/api/ai", { action, ...payload }, key);
+}
+
+async function post(path, payload, key = apiKey) {
   const headers = { "Content-Type":"application/json" };
   if (key) headers["x-studyroom-key"] = key;
-  let response, result;
-  try {
-    response = await fetch("/api/ai", { method:"POST", headers, body:JSON.stringify({ action, provider:selected, ...payload }) });
-    result = await response.json();
-  } catch { throw new Error("Studyroom could not connect to " + aiProviders[selected].name + ". Try again."); }
-  if (!response.ok) throw new Error(result.error || aiProviders[selected].name + " is temporarily unavailable.");
+  const response = await fetch(path, { method:"POST", headers, body:JSON.stringify(payload) });
+  let result;
+  try { result = await response.json(); }
+  catch { throw new Error("Studyroom could not reach Claude. Try again."); }
+  if (!response.ok) throw new Error(result.error || "Claude is temporarily unavailable.");
   return result;
 }
 
@@ -134,20 +136,12 @@ function busyForm(form, busy, label = "") {
 
 const alertBox = '<p class="notice error" role="alert" hidden></p>';
 const formEnd = (label) => alertBox + '<div class="modal-actions">' + button("Cancel","close") + '<button class="button primary" type="submit">' + label + '</button></div></form>';
-function settings() {
-  const { name, url, audio } = activeProvider();
-  const config = providerConfig[provider];
-  const options = Object.entries(aiProviders).map(([id, { option }]) =>
-    '<option value="' + id + '"' + (id === provider ? ' selected' : '') + '>' + option + '</option>').join("");
-  showDialog("AI settings", "Choose the provider for study packs and exam feedback.",
-    '<form data-form="key"><label class="field">AI provider<select name="provider">' + options + '</select></label>' +
-    '<label class="field">' + name + ' API key<input name="key" type="password" autocomplete="off" placeholder="Enter your API key" required maxlength="512"></label>' +
-    '<p class="subtle inline-ref">' + (config?.model ? 'Model ' + html(config.model) + ' · ' : '') + '<a href="' + url + '" target="_blank" rel="noopener">Get an API key</a></p>' +
-    '<p class="subtle">Pasted keys stay in page memory. Studyroom sends selected materials, submitted answers' + (audio ? ', and recordings' : '') + ' to ' + name + ' when you use AI features.</p>' +
-    (!audio ? '<p class="subtle">With Claude, type your oral-exam answers. Gemini and OpenAI also support recording and transcription.</p>' : '') +
-    (connected() ? '<p class="notice">' + (apiKeys[provider] ? 'A session key is connected.' : 'A server key is configured.') + '</p>' : '') +
-    (apiKeys[provider] ? button("Disconnect session key","disconnect","quiet") : '') + formEnd("Connect key"));
-}
+const settings = () => showDialog("Claude settings", "Connect a Claude API key to generate study packs, grade answers, and run spoken exams.",
+  '<form data-form="key"><label class="field">Claude API key<input name="key" type="password" autocomplete="off" placeholder="sk-ant-…" required maxlength="300"></label>' +
+  '<p class="subtle">Your key stays in memory until you reload or disconnect. Materials and answers are sent to Anthropic when you ask Claude to process them.</p>' +
+  '<p class="subtle inline-ref">Model ' + html(config.model) + ' · <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">Get an API key</a></p>' +
+  (connected() ? '<p class="notice">' + (apiKey ? 'A session key is connected.' : 'A server key is configured.') + '</p>' : '') +
+  (apiKey ? button("Disconnect session key","disconnect","quiet") : '') + formEnd("Connect key"));
 
 const gazeMessages = {
   off:"Turn on your camera to get private delivery feedback during this oral exam.",
@@ -157,25 +151,23 @@ const gazeMessages = {
   unavailable:"Keep your face in view and your eyes comfortably open.",
   near:"Estimated gaze is near your camera baseline.",
   away:"Estimated gaze has shifted from your camera baseline.",
-  alert:"Gaze has remained outside the allowed area for more than 2 seconds.",
   paused:"Camera off. Turn it back on to recalibrate and continue.",
 };
 
 function gazePanel() {
   return '<section class="gaze-panel" aria-labelledby="gaze-title" data-gaze-state="off"><div class="gaze-scope" aria-hidden="true"><i></i><b></b></div>' +
     '<div class="gaze-copy"><div class="gaze-heading"><h3 id="gaze-title">Eye tracking</h3><span class="gaze-chip">Camera off</span></div>' +
-    '<p class="gaze-message" role="status" aria-live="polite">' + gazeMessages.off + '</p><div class="gaze-progress" aria-hidden="true" hidden><span></span></div>' +
-    '<details class="gaze-privacy"><summary>About camera feedback</summary><p>Camera images are processed on this device and discarded. Only sustained off-track alerts are timestamped and saved on this device. Looking away is normal and has no effect on your score.</p></details></div>' +
+    '<p class="gaze-message">' + gazeMessages.off + '</p><div class="gaze-progress" aria-hidden="true" hidden><span></span></div>' +
+    '<details class="gaze-privacy"><summary>About camera feedback</summary><p>Camera images are processed on this device and discarded. Your review saves aggregate estimates on this device. Looking away is normal and has no effect on your score.</p></details></div>' +
     '<div class="gaze-controls"><button type="button" class="button outline" data-action="toggle-gaze">' + icon("camera") + '<span>Turn on camera</span></button>' +
-    '<button type="button" class="button quiet" data-action="recalibrate-gaze" hidden>' + icon("focus") + 'Recalibrate</button></div>' +
-    '<div class="gaze-event-log"><strong>Off-track log</strong><ol class="gaze-event-list" aria-live="polite" aria-relevant="additions"><li class="gaze-log-empty">No off-track events.</li></ol></div></section>';
+    '<button type="button" class="button quiet" data-action="recalibrate-gaze" hidden>' + icon("focus") + 'Recalibrate</button></div></section>';
 }
 
 function paintGaze() {
   const panel = main.querySelector(".gaze-panel");
   if (!panel || !session?.gaze) return;
   const { status, progress, x, y, error } = session.gazeView;
-  const tag = { permission:"Starting", loading:"Loading", calibrating:"Calibrating", unavailable:"Low signal", near:"Camera on", away:"Camera on", alert:"Outside area", error:"Unavailable" };
+  const tag = { permission:"Starting", loading:"Loading", calibrating:"Calibrating", unavailable:"Low signal", near:"Camera on", away:"Camera on", error:"Unavailable" };
   panel.dataset.gazeState = status;
   const setText = (selector, value) => {
     const node = panel.querySelector(selector);
@@ -192,10 +184,6 @@ function paintGaze() {
   const offset = (value) => Math.max(-23, Math.min(23, (value || 0) * 38)) + "px";
   scope.style.setProperty("--gaze-x", offset(-x));
   scope.style.setProperty("--gaze-y", offset(y));
-  const events = session.gaze.events();
-  panel.querySelector(".gaze-event-list").innerHTML = events.length ? events.map(({ action, at }) =>
-    '<li><time datetime="' + html(at) + '">' + html(new Date(at).toLocaleTimeString()) + '</time> ' + html(action) + '</li>').join("") :
-    '<li class="gaze-log-empty">No off-track events.</li>';
 }
 
 function stopGaze(update = true) {
@@ -244,11 +232,8 @@ function gazeReview(summary) {
     '<dl class="gaze-metrics"><div><dt>Near camera baseline</dt><dd>' + summary.nearPercent + '%</dd></div>' +
     '<div><dt>Usable camera time</dt><dd>' + summary.trackedSeconds + ' s</dd></div>' +
     '<div><dt>Usable sample coverage</dt><dd>' + summary.coverage + '%</dd></div></dl>';
-  const events = summary.events?.length ? '<details class="gaze-event-log"><summary>Off-track events (' + summary.events.length + ')</summary><ol>' +
-    summary.events.map(({ action, at }) => '<li><time datetime="' + html(at) + '">' +
-      html(new Date(at).toLocaleTimeString()) + '</time> ' + html(action) + '</li>').join("") + '</ol></details>' : "";
   return '<section class="panel gaze-review"><div class="resource-name">' + toolIcon("eye","blue") +
-    '<div><h2>Eye tracking feedback</h2><p class="subtle">An estimate of where you looked relative to your calibration. This has no effect on your exam score.</p></div></div>' + data + events + '</section>';
+    '<div><h2>Eye tracking feedback</h2><p class="subtle">An estimate of where you looked relative to your calibration. This has no effect on your exam score.</p></div></div>' + data + '</section>';
 }
 
 function sourceById(sourceId) { return data.sources.find((source) => source.id === sourceId); }
@@ -286,7 +271,7 @@ function generateDialog() {
   if (!activeSources().length) { uploadDialog(); return; }
   if (!connected()) { generateAfterConnecting = true; settings(); return; }
   const sources = activeSources();
-  showDialog("Generate a study pack","Select the materials " + activeProvider().name + " should turn into notes, practice questions, and studyboard topics.",
+  showDialog("Generate a study pack","Select the materials Claude should turn into notes, practice questions, and studyboard topics.",
     '<form data-form="generate"><div class="stack">' + sources.map((source, index) =>
       '<label class="choice"><input type="checkbox" name="sources" value="' + html(source.id) + '"' +
       (sources.length <= 8 || index === 0 ? ' checked' : '') + '>' + html(source.name) + '</label>').join("") + '</div>' +
@@ -309,7 +294,7 @@ function overview() {
   const pack = activeData();
   const spotlight = own.at(-1) || data.sources[0];
   const counts = pack ? pack.oral.length + pack.written.length + pack.quiz.length : 0;
-  return '<section class="hero"><div class="hero-copy"><span class="hero-label">' + icon("spark") + (pack?.sample ? 'Sample pack loaded' : pack ? 'Study pack ready' : 'AI study workspace') + '</span>' +
+  return '<section class="hero"><div class="hero-copy"><span class="hero-label">' + icon("spark") + (pack?.sample ? 'Sample pack loaded' : pack ? 'Study pack ready' : 'Claude study workspace') + '</span>' +
     '<h1>Study to <em>remember.</em></h1><p>Turn your study materials into clear notes, interactive practice exams, and a plan for what to review next.</p><div class="actions">' +
     button("Add study material","upload","primary","plus") + (own.length ? button("Generate study pack","generate","outline","spark") : button(pack?.sample ? "Try a sample exam" : "Start practice","start:quiz","outline","bolt")) +
     '</div></div><div class="hero-art" aria-hidden="true"><div class="hero-grid"></div><div class="orbit"></div><div class="orbit inner"></div><div class="orbit outer"></div>' +
@@ -327,7 +312,7 @@ function overview() {
 }
 
 function materials() {
-  return intro("Materials","Manage the source documents used to build your study pack.",
+  return intro("Materials","Manage the source documents Claude uses to build your study pack.",
     button("Add study material","upload","primary","plus") + button("Generate study pack","generate","outline","spark")) +
     '<div class="stack">' + data.sources.map((source) => '<article class="resource row"><div class="resource-name">' +
       toolIcon(source.type === "pdf" ? "notes" : "book", source.sample ? "purple" : "") + '<div><strong>' + html(source.name) + '</strong><p class="subtle">' +
@@ -371,7 +356,8 @@ function navigate(page) {
   if (!Object.hasOwn(pages, page)) return;
   if (screen === page) { render(); return; }
   if (screen === "practice") {
-    cancelMicrophone();
+    stopDictation();
+    pauseLive("Paused while you were away. Resume the call to continue.");
     stopGaze();
     window.speechSynthesis?.cancel();
   }
@@ -382,15 +368,10 @@ function navigate(page) {
   window.scrollTo(0, 0);
 }
 
-function renderConnection() {
-  document.querySelector("#connection-provider").textContent = activeProvider().name;
-  document.querySelector("#connection-status").textContent = connected() ? "Connected" : "Connect your API key";
-  document.documentElement.dataset.ai = connected() ? "connected" : "disconnected";
-}
-
 function render() {
   document.querySelector("#crumb").textContent = pages[screen];
-  renderConnection();
+  document.querySelector("#connection-status").textContent = connected() ? "Connected" : "Connect your API key";
+  document.documentElement.dataset.ai = connected() ? "connected" : "disconnected";
   for (const element of document.querySelectorAll(".nav-item[data-nav]")) {
     const current = element.dataset.nav === screen;
     element.classList.toggle("active", current);
@@ -399,6 +380,7 @@ function render() {
   }
   main.innerHTML = ({ overview, materials, notes, board, practice })[screen]();
   paintGaze();
+  paintLive();
 }
 
 function practice() {
@@ -407,40 +389,324 @@ function practice() {
   const pack = activeData();
   return intro("Practice exams","Choose an exam format and practice with questions from your study pack.",
     button("Question bank","questions","outline","notes") + button("Generate study pack","generate","primary","spark")) +
-    (pack?.sample ? '<p class="notice">Try the sample exams or add your own study material.</p>' : '') +
+    (pack?.sample ? '<p class="notice">Try the sample exams while you connect Claude or add your own material.</p>' : '') +
     modeTiles() + (data.history.length ? '<section class="section"><div class="section-head"><h2>Recent sessions</h2></div><div class="stack">' +
       data.history.slice(0, 8).map((result) => '<article class="resource row"><div class="resource-name">' +
-      toolIcon(modes[result.mode].icon, modes[result.mode].color) + '<div><strong>' + modes[result.mode].title + '</strong><p class="subtle">' +
+      toolIcon(modes[result.mode].icon, modes[result.mode].color) + '<div><strong>' + modes[result.mode].title + (result.live ? ' · ' + html(result.live.name) : '') + '</strong><p class="subtle">' +
       formatDate(result.completed) + ' · ' + result.answers.length + ' questions</p></div></div><div class="actions">' +
-      badge(result.score + "%") + button("Review","review:" + result.id) + '</div></article>').join("") + '</div></section>' : '');
+      badge(scoreLabel(result.score)) + button("Review","review:" + result.id) + '</div></article>').join("") + '</div></section>' : '');
 }
 
-function begin(mode, retry) {
+const personaMark = (persona) => persona.name.split(" ").at(-1).slice(0, 1).toUpperCase();
+const scoreLabel = (score) => score === null || score === undefined ? "Not graded" : score + "%";
+
+function begin(mode, retry, style) {
   const pack = activeData();
-  const questions = retry ? retry.answers.filter((item) => item.score < 75).map((item) => item.question) : pack?.[mode];
+  const questions = retry ? retry.answers.filter((item) => item.score === null || item.score < 75).map((item) => item.question) : pack?.[mode];
   if (!questions?.length) { generateDialog(); return; }
   if (session) {
     navigate("practice");
     notify("Your current practice session is ready to resume.");
     return;
   }
+  if (mode === "oral" && !style) { oralDialog(retry); return; }
   report = null;
-  session = { mode, questions:structuredClone(questions), sample:retry ? retry.sample : pack.sample, index:0, answers:[], draft:"", choice:null, followUp:"", firstAnswer:"", pending:false, error:"" };
+  session = { mode, questions:structuredClone(questions), sample:retry ? retry.sample : pack.sample, index:0, answers:[], draft:"", interim:"", choice:null, followUp:"", firstAnswer:"", pending:false, error:"" };
   if (mode === "oral") {
     session.gaze = createGazeSession();
     session.gazeView = { status:"off" };
+    const persona = config.personas.find((entry) => entry.id === style);
+    if (persona && connected()) {
+      session.live = { persona, status:"thinking", message:"", index:0, run:0, transcript:createLiveTranscript(questions.length),
+        results:new Array(questions.length).fill(null), grading:0, finished:false, language:"", voice:null, interim:"", typing:!canListen, lastSaid:"", retry:"" };
+    }
   }
   navigate("practice");
+  if (session.live) void liveStep(session, "start");
+}
+
+function oralDialog(retry) {
+  pendingRetry = retry || null;
+  const live = connected() && config.personas.length;
+  let preferred = retry?.live?.persona;
+  try { preferred ||= localStorage.getItem("studyroom-persona"); } catch {}
+  if (!config.personas.some((persona) => persona.id === preferred)) preferred = config.personas[0]?.id;
+  showDialog("Oral exam", "Talk with an examiner who speaks, listens, and reacts to your answers, or answer one question at a time.",
+    '<form data-form="oral-setup"><fieldset class="persona-list"><legend>Spoken conversation</legend>' +
+    (live ? config.personas.map((persona) => '<label class="choice persona"><input type="radio" name="style" value="' + html(persona.id) + '"' +
+      (persona.id === preferred ? ' checked' : '') + ' required><span class="persona-mark" aria-hidden="true">' + html(personaMark(persona)) + '</span><span><strong>' + html(persona.name) + '</strong><span class="subtle">' + html(persona.description) + '</span></span></label>').join("") :
+      '<p class="notice">Connect a Claude API key in Settings to talk with an examiner.</p>') +
+    '</fieldset><fieldset class="persona-list"><legend>Classic</legend><label class="choice persona"><input type="radio" name="style" value="classic"' + (live ? '' : ' checked') +
+    ' required><span class="persona-mark" aria-hidden="true">' + icon("pen") + '</span><span><strong>One question at a time</strong><span class="subtle">Dictate or type each answer and edit it before you submit.</span></span></label></fieldset>' +
+    '<p class="subtle">' + (canListen ? 'Your browser turns your speech into text, which in Chrome uses Google’s speech service. ' : 'This browser can’t recognize speech, so you’ll type your answers while the examiner speaks. ') +
+    'Claude writes the examiner’s replies, and your browser reads them aloud. Your score never depends on the examiner’s personality.</p>' + formEnd("Start exam"));
+}
+
+function startOral(form) {
+  const style = new FormData(form).get("style");
+  if (!style) return;
+  const retry = pendingRetry;
+  modal.close();
+  if (style !== "classic") {
+    try { localStorage.setItem("studyroom-persona", style); } catch {}
+  }
+  begin("oral", retry, style);
+}
+
+function liveStatusText(live) {
+  const name = live.persona.name;
+  return ({
+    thinking:name + " is thinking…",
+    speaking:name + " is speaking",
+    listening:live.typing ? "Your turn · type your answer below" : live.interim ? "Listening…" : "Your turn · speak whenever you’re ready",
+    paused:live.message || "Paused. Resume when you’re ready.",
+    error:live.message || "Something went wrong. Resume to try again.",
+    ended:live.grading ? "Exam finished · grading your answers…" : "Exam finished",
+  })[live.status] || "Starting…";
+}
+
+function conversationHtml(turns, examiner) {
+  return turns.map(({ role, text }) => '<p class="live-line ' + role + '"><strong>' + (role === "learner" ? "You" : html(examiner)) + '</strong>' + html(text) + '</p>').join("");
+}
+
+function liveExam() {
+  const current = session;
+  const live = current.live;
+  return '<section class="panel practice-box live-box"><div class="row"><div class="resource-name">' + toolIcon("mic","purple") +
+    '<div><h3>Spoken oral exam</h3><p class="subtle">' + html(live.persona.name) + ' · ' + (current.sample ? "Sample study pack" : "Your study pack") + '</p></div></div>' +
+    button("Hang up","hang-up","quiet danger","phone") + '</div><div class="live-progress"></div>' +
+    '<div class="live-stage" data-status=""><div class="live-orb" aria-hidden="true"><i></i><i></i><span>' + html(personaMark(live.persona)) + '</span></div>' +
+    '<p class="live-status" role="status"></p><p class="live-voice"></p></div>' +
+    '<details class="review live-question"><summary>Show question text</summary><p class="body-text"></p></details>' +
+    '<div class="live-log" role="log" aria-label="Conversation transcript"></div>' +
+    '<form data-form="live-answer" class="live-type"><label class="field">' + (canListen ? 'Or type your answer' : 'Your answer') +
+    '<textarea name="answer" rows="2" maxlength="4000" placeholder="Type your answer…"></textarea></label><button type="submit" class="button outline">' + icon("check") + 'Send</button></form>' +
+    '<div class="actions live-controls">' + button("Done speaking","live-done","primary","check") + button("Interrupt","live-interrupt","outline","stop") +
+    button("Repeat","live-repeat","quiet","volume") + button("Skip question","live-skip","outline","skip") + button("Pause","live-pause","quiet","clock") +
+    button("Resume","live-resume","primary","mic") + '</div>' +
+    '<p class="subtle live-note">Each answer is graded from the transcript when you move on. The examiner’s personality never changes your score.</p></section>' + gazePanel();
+}
+
+function paintLive() {
+  const live = session?.live;
+  const box = main.querySelector(".live-box");
+  if (!live || !box) return;
+  const total = session.questions.length;
+  const index = Math.min(live.index, total - 1);
+  const setHtml = (node, value) => { if (node.innerHTML !== value) node.innerHTML = value; };
+  const setText = (node, value) => { if (node.textContent !== value) node.textContent = value; };
+  setHtml(box.querySelector(".live-progress"), '<div class="row draft"><p class="subtle">Question ' + (index + 1) + ' of ' + total + '</p>' +
+    (live.grading ? badge("Grading " + live.grading + "…", true) : '') + '</div><div class="meter" role="progressbar" aria-label="Questions completed" aria-valuemin="0" aria-valuemax="' + total +
+    '" aria-valuenow="' + live.index + '"><span style="width:' + (100 * live.index / total) + '%"></span></div>');
+  box.querySelector(".live-stage").dataset.status = live.status === "listening" && live.interim ? "hearing" : live.status;
+  setText(box.querySelector(".live-status"), liveStatusText(live));
+  const voice = live.voice?.voice;
+  setText(box.querySelector(".live-voice"), !canSpeak ? "This browser can’t speak, so read the examiner’s lines below." :
+    voice ? "Voice: " + voice.name + (live.voice.matchesLanguage ? "" : " · no voice installed for this language") : "");
+  setText(box.querySelector(".live-question p"), session.questions[index].prompt);
+  const log = box.querySelector(".live-log");
+  const turns = live.transcript.turns(index).slice(-8);
+  const before = log.innerHTML;
+  setHtml(log, (turns.length ? conversationHtml(turns, live.persona.name) : '<p class="subtle">The conversation appears here.</p>') +
+    (live.interim ? '<p class="live-line learner interim"><strong>You</strong>' + html(live.interim) + '</p>' : ''));
+  if (log.innerHTML !== before) log.scrollTop = log.scrollHeight;
+  const show = (action, visible) => { box.querySelector("[data-action=" + action + "]").hidden = !visible; };
+  const listening = live.status === "listening";
+  show("live-done", listening && !live.typing);
+  show("live-interrupt", live.status === "speaking");
+  show("live-repeat", listening && Boolean(live.lastSaid));
+  show("live-skip", (listening || live.status === "speaking") && !live.finished);
+  show("live-pause", ["listening", "speaking", "thinking"].includes(live.status) && !live.finished);
+  show("live-resume", live.status === "paused" || live.status === "error");
+  show("hang-up", live.status !== "ended");
+  box.querySelector(".live-type").hidden = !listening;
+}
+
+const liveStale = (current, run) => session !== current || current.live.run !== run;
+
+function stopLiveAudio() {
+  const audio = liveAudio;
+  liveAudio = null;
+  audio?.stop();
+}
+
+async function liveStep(current, event) {
+  const live = current.live;
+  if (session !== current || live.finished) return;
+  const run = ++live.run;
+  stopLiveAudio();
+  live.status = "thinking";
+  live.message = "";
+  live.interim = "";
+  live.retry = "";
+  paintLive();
+  let reply;
+  try {
+    reply = await ai("examine", { persona:live.persona.id, event, index:live.index,
+      questions:current.questions.map(({ topic, prompt, answer, rubric }) => ({ topic, prompt, answer, rubric })),
+      turns:live.transcript.turns(live.index).slice(-40) });
+  } catch (error) {
+    if (liveStale(current, run)) return;
+    live.status = "error";
+    live.message = error.message + " Choose Resume to try again.";
+    live.retry = event;
+    paintLive();
+    return;
+  }
+  if (liveStale(current, run)) return;
+  live.language = reply.language || live.language;
+  const total = current.questions.length;
+  if (reply.advance) {
+    gradeLive(current, live.index, event === "skip" && !live.transcript.learnerText(live.index));
+    live.index += 1;
+    live.finished = live.index >= total;
+  }
+  live.transcript.add(Math.min(live.index, total - 1), "examiner", reply.say);
+  live.lastSaid = reply.say;
+  await speakLive(current, run, reply.say);
+  if (liveStale(current, run)) return;
+  if (live.finished) hangUpLive(current);
+  else listenLive(current, run);
+}
+
+async function speakLive(current, run, text) {
+  const live = current.live;
+  if (!live.voice || live.voice.forLanguage !== live.language) live.voice = await pickVoice(live.persona.id, live.language);
+  if (liveStale(current, run)) return;
+  live.status = "speaking";
+  paintLive();
+  const controller = new AbortController();
+  const audio = { stop:() => controller.abort() };
+  liveAudio = audio;
+  await speak(text, live.voice, controller.signal);
+  if (liveAudio === audio) liveAudio = null;
+}
+
+function listenLive(current, run) {
+  const live = current.live;
+  live.status = "listening";
+  live.interim = "";
+  paintLive();
+  if (live.typing) { main.querySelector(".live-type textarea")?.focus(); return; }
+  const started = Date.now();
+  const listener = listen({ lang:live.voice?.lang || live.language, onInterim:(text) => {
+    if (liveStale(current, run)) return;
+    live.interim = text;
+    paintLive();
+  } });
+  const audio = { stop:() => listener.cancel(), finish:() => listener.finish() };
+  liveAudio = audio;
+  listener.result.then((said) => {
+    if (liveStale(current, run) || liveAudio !== audio) return;
+    liveAudio = null;
+    if (said) { submitLiveAnswer(current, said); return; }
+    if (Date.now() - started < 1_500) {
+      live.typing = true;
+      notify("Speech recognition stopped right away, so type your answer instead.");
+    }
+    listenLive(current, run);
+  }, (error) => {
+    if (liveStale(current, run) || liveAudio !== audio) return;
+    liveAudio = null;
+    live.typing = true;
+    notify(error.message);
+    listenLive(current, run);
+  });
+}
+
+function submitLiveAnswer(current, text) {
+  const live = current.live;
+  if (session !== current || live.finished || !text.trim()) return;
+  live.transcript.add(live.index, "learner", text.trim());
+  live.interim = "";
+  void liveStep(current, "reply");
+}
+
+function resumeLive() {
+  const current = session;
+  const live = current?.live;
+  if (!live || live.finished) return;
+  if (live.retry) { void liveStep(current, live.retry); return; }
+  void liveStep(current, live.index || live.transcript.turns(0).length ? "resume" : "start");
+}
+
+function pauseLive(message) {
+  const live = session?.live;
+  if (!live || ["ended", "paused"].includes(live.status)) return;
+  live.run += 1;
+  stopLiveAudio();
+  live.status = "paused";
+  live.message = message;
+  live.interim = "";
+  paintLive();
+}
+
+function gradeLive(current, index, skipped) {
+  const live = current.live;
+  const question = current.questions[index];
+  const conversation = live.transcript.turns(index);
+  const answer = live.transcript.learnerText(index);
+  const base = { question, answer, firstAnswer:"", followUpQuestion:"", conversation };
+  if (skipped || !answer) {
+    live.results[index] = { ...base, score:0, strength:"", gap:"Answer this question aloud next time.",
+      feedback:skipped ? "Skipped during the spoken exam." : "No answer was captured for this question." };
+    return;
+  }
+  live.grading += 1;
+  ai("grade", { attempt:liveAttempt(question, conversation) })
+    .then(({ score, strength, gap, feedback }) => { live.results[index] = { ...base, score, strength, gap, feedback }; })
+    .catch((error) => { live.results[index] = { ...base, score:null, strength:"", gap:"", feedback:"This answer could not be graded: " + error.message }; })
+    .finally(() => {
+      live.grading -= 1;
+      paintLive();
+      finishLive(current);
+    });
+}
+
+function hangUpLive(current = session) {
+  const live = current?.live;
+  if (!live) return;
+  live.run += 1;
+  stopLiveAudio();
+  if (!live.finished) {
+    live.finished = true;
+    if (live.index < current.questions.length && live.transcript.learnerText(live.index)) gradeLive(current, live.index, false);
+  }
+  live.status = "ended";
+  live.interim = "";
+  paintLive();
+  finishLive(current);
+}
+
+function finishLive(current) {
+  const live = current.live;
+  if (session !== current || live.status !== "ended" || live.grading) return;
+  const answers = live.results.filter(Boolean);
+  stopGaze(false);
+  session = null;
+  if (!answers.length) {
+    if (screen === "practice") render();
+    notify("The exam ended before any question was answered.");
+    return;
+  }
+  const scored = answers.filter((item) => item.score !== null);
+  report = { id:id(), mode:"oral", sample:current.sample, completed:new Date().toISOString(), answers,
+    score:scored.length ? Math.round(scored.reduce((total, item) => total + item.score, 0) / scored.length) : null,
+    live:{ persona:live.persona.id, name:live.persona.name } };
+  if (current.gaze && current.gazeView.status !== "off") report.gaze = current.gaze.summary();
+  data.history.unshift(report);
+  data.history = data.history.slice(0, 40);
+  void persist();
+  if (screen === "practice") { render(); window.scrollTo(0, 0); }
 }
 
 function exam() {
   const current = session;
+  if (current.live) return liveExam();
   const question = current.questions[current.index];
   const mode = modes[current.mode];
   const oral = current.mode === "oral";
-  const draftDisabled = current.pending || Boolean(mic);
-  const recording = mic?.stage === "recording";
-  const audioBusy = Boolean(mic) && !recording;
+  const draftDisabled = current.pending || Boolean(dictation);
   const step = current.index + 1;
   return '<section class="panel practice-box"><div class="row"><div class="resource-name">' + toolIcon(mode.icon, mode.color) +
     '<div><h3>' + mode.title + '</h3><p class="subtle">' + (current.sample ? "Sample study pack" : "Your study pack") +
@@ -451,12 +717,9 @@ function exam() {
     '%"></span></div><h2 tabindex="-1" id="exam-question">' + html(current.followUp || question.prompt) + '</h2>' +
     (current.followUp ? '<details class="review"><summary>Original question and answer</summary><p>' + html(question.prompt) +
       '</p><p class="subtle body-text">' + html(current.firstAnswer) + '</p></details>' : '') +
-    (oral ? '<div class="actions">' + ("speechSynthesis" in window ? button("Read question","speak","outline","volume") : "") +
-      (recording ? button("Stop and transcribe","record","recording","stop") :
-        audioBusy ? '<span class="notice" role="status"><span class="busy"></span> ' + (mic.stage === "requesting" ? "Waiting for microphone…" : "Transcribing…") + '</span>' :
-        connected() && activeProvider().audio && navigator.mediaDevices?.getUserMedia && "MediaRecorder" in window && !current.pending ? button("Record answer","record","outline","mic") : "") + '</div>' +
-      (!activeProvider().audio ? '<p class="subtle draft">Type your answer to get feedback from Claude. To record, choose Gemini or OpenAI in AI settings.</p>' :
-        !connected() ? '<p class="subtle draft">Connect an API key in AI settings to record and transcribe your answer. You can type it here.</p>' : '') : '') +
+    (oral ? '<div class="actions">' + (canSpeak ? button("Read question","speak","outline","volume") : "") +
+      (canListen && !current.pending ? (dictation ? button("Stop dictation","dictate","recording","stop") : button("Dictate answer","dictate","outline","mic")) : "") + '</div>' +
+      (dictation ? '<p class="subtle draft dictation-interim" aria-live="polite"></p>' : '') : '') +
     '<form data-form="answer">' +
     (current.mode === "quiz" ? '<div class="choices">' + question.options.map((option, index) =>
       '<label class="choice"><input type="radio" name="choice" value="' + index + '"' + (current.choice === index ? " checked" : "") +
@@ -493,7 +756,7 @@ function demoFeedback(question, answer, allowFollowUp) {
 
 async function submitAnswer(form) {
   const current = session;
-  if (!current || current.pending || mic) return;
+  if (!current || current.pending || dictation) return;
   const fields = new FormData(form);
   const question = current.questions[current.index];
   const quiz = current.mode === "quiz";
@@ -511,8 +774,8 @@ async function submitAnswer(form) {
     render();
     const allowFollowUp = current.mode === "oral" && !current.followUp;
     try {
-      if (!connected() && !current.sample) throw new Error("Connect an API key in AI settings to evaluate this answer.");
-      feedback = connected() ? await requestAI("grade", { attempt:{
+      if (!connected() && !current.sample) throw new Error("Connect Claude in Settings to evaluate this answer.");
+      feedback = connected() ? await ai("grade", { attempt:{
         mode:current.mode, question:question.prompt, modelAnswer:question.answer, rubric:question.rubric,
         sourceExcerpt:question.reference?.excerpt || "", answer:current.followUp ? current.firstAnswer : answer,
         followUpQuestion:current.followUp, followUpAnswer:current.followUp ? answer : "", allowFollowUp,
@@ -543,10 +806,8 @@ async function submitAnswer(form) {
   if (current.index === current.questions.length) {
     const score = Math.round(current.answers.reduce((total, item) => total + item.score, 0) / current.answers.length);
     report = { id:id(), mode:current.mode, sample:current.sample, completed:new Date().toISOString(), answers:current.answers, score };
+    if (current.gaze && current.gazeView.status !== "off") report.gaze = current.gaze.summary();
     stopGaze(false);
-    if (current.gaze && current.gazeView.status !== "off") {
-      report.gaze = { ...current.gaze.summary(), events:current.gaze.events() };
-    }
     data.history.unshift(report);
     data.history = data.history.slice(0, 40);
     session = null;
@@ -556,13 +817,15 @@ async function submitAnswer(form) {
 }
 
 function reviewSession() {
-  const weak = report.answers.filter((item) => item.score < 75);
-  return intro("Session review",modes[report.mode].title + " · " + report.answers.length + " questions · " + report.score + "% overall",
+  const weak = report.answers.filter((item) => item.score === null || item.score < 75);
+  return intro("Session review",modes[report.mode].title + (report.live ? " with " + html(report.live.name) : "") + " · " + report.answers.length + " questions · " +
+    (report.score === null ? "not graded" : report.score + "% overall"),
     button("All practice exams","practice-home","outline") + (weak.length ? button("Add review topics","review-topics","primary","plus") + button("Retry missed topics","retry","outline","bolt") : button("Practice again","start:" + report.mode,"primary","bolt"))) +
     gazeReview(report.gaze) + '<div class="stack">' + report.answers.map((item, index) => '<article class="panel"><div class="row"><h2>' +
-      html(item.question.topic) + '</h2>' + badge(item.score + "%", item.score < 75) + '</div>' +
+      html(item.question.topic) + '</h2>' + badge(scoreLabel(item.score), item.score === null || item.score < 75) + '</div>' +
       '<details class="review"' + (index === 0 ? " open" : "") + '><summary>' + html(item.question.prompt) + '</summary>' +
-      '<p class="body-text"><strong>Your answer</strong> ' + html(item.firstAnswer || item.answer) + '</p>' +
+      (item.conversation ? (item.conversation.length ? '<div class="live-log review-log">' + conversationHtml(item.conversation, report.live?.name || "Examiner") + '</div>' : '') :
+        '<p class="body-text"><strong>Your answer</strong> ' + html(item.firstAnswer || item.answer) + '</p>') +
       (item.followUpQuestion ? '<p class="body-text"><strong>Follow-up</strong> ' + html(item.followUpQuestion) + '</p><p class="body-text">' + html(item.answer) + '</p>' : '') +
       (item.feedback ? '<p class="body-text">' + html(item.feedback) + '</p>' : '') +
       (item.strength ? '<p class="body-text"><strong>Strength</strong> ' + html(item.strength) + '</p>' : '') +
@@ -617,78 +880,42 @@ function blobToBase64(blob) {
   });
 }
 
-function cancelMicrophone() {
-  const current = mic;
-  if (!current) return;
-  mic = null;
-  clearTimeout(current.timer);
-  if (current.recorder?.state === "recording") current.recorder.stop();
-  current.stream?.getTracks().forEach((track) => track.stop());
+function paintDictation() {
+  const area = main.querySelector('form[data-form="answer"] [name="answer"]');
+  if (area && session && area.value !== session.draft) area.value = session.draft;
+  const interim = main.querySelector(".dictation-interim");
+  if (interim) interim.textContent = session?.interim || "";
 }
 
-async function toggleRecording() {
-  if (!session || session.pending) return;
-  if (mic?.stage === "recording") {
-    mic.stage = "transcribing";
-    mic.recorder.stop();
-    render();
-    return;
-  }
-  if (mic || !connected() || !activeProvider().audio) return;
+function stopDictation() {
+  dictation?.stop();
+}
+
+function toggleDictation() {
+  if (dictation) { stopDictation(); return; }
+  const current = session;
+  if (!current || current.pending || !canListen) return;
   window.speechSynthesis?.cancel();
-  const current = { stage:"requesting", session, chunks:[], provider, key:apiKeys[provider] };
-  mic = current;
-  session.error = "";
+  current.error = "";
+  current.interim = "";
+  const active = dictate({
+    lang:navigator.language,
+    onText:(text) => {
+      if (session !== current || !text) return;
+      current.draft = [current.draft, text].filter(Boolean).join(" ").slice(0, 8000);
+      paintDictation();
+    },
+    onInterim:(text) => { if (session === current) { current.interim = text; paintDictation(); } },
+    onError:(message) => { if (session === current) current.error = message; },
+    onEnd:() => {
+      if (dictation !== active) return;
+      dictation = null;
+      current.interim = "";
+      if (session === current && screen === "practice") { render(); main.querySelector('[name="answer"]')?.focus(); }
+    },
+  });
+  dictation = active;
   render();
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio:true });
-    current.stream = stream;
-    if (mic !== current) { stream.getTracks().forEach((track) => track.stop()); return; }
-    const supported = ["audio/webm;codecs=opus","audio/ogg;codecs=opus","audio/mp4"].find((type) => MediaRecorder.isTypeSupported(type));
-    const recorder = new MediaRecorder(stream, supported ? { mimeType:supported } : undefined);
-    current.recorder = recorder;
-    recorder.addEventListener("dataavailable", (event) => { if (event.data.size) current.chunks.push(event.data); });
-    recorder.addEventListener("error", () => {
-      if (mic !== current) return;
-      cancelMicrophone();
-      current.session.error = "Recording failed. Try again or type your answer.";
-      render();
-    });
-    recorder.addEventListener("stop", async () => {
-      clearTimeout(current.timer);
-      stream.getTracks().forEach((track) => track.stop());
-      if (mic !== current) return;
-      current.stage = "transcribing";
-      if (screen === "practice") render();
-      try {
-        let mimeType = (recorder.mimeType || current.chunks[0]?.type || "audio/webm").split(";")[0];
-        if (mimeType === "video/webm") mimeType = "audio/webm";
-        const blob = new Blob(current.chunks, { type:mimeType });
-        if (!blob.size || blob.size > 4_000_000) throw new Error("The recording is empty or too large. Try a shorter answer.");
-        const recordingData = await blobToBase64(blob);
-        if (mic !== current) return;
-        const { transcript } = await requestAI("transcribe", { mimeType, data:recordingData }, current.provider, current.key);
-        if (mic !== current) return;
-        if (!transcript.trim()) throw new Error("No clear speech was detected. Try again or type your answer.");
-        current.session.draft = [current.session.draft, transcript.trim()].filter(Boolean).join(" ").slice(0, 8000);
-      } catch (error) { if (mic === current) current.session.error = error.message; }
-      finally {
-        if (mic === current) {
-          mic = null;
-          if (screen === "practice") { render(); document.querySelector('[name="answer"]')?.focus(); }
-        }
-      }
-    });
-    recorder.start();
-    current.stage = "recording";
-    current.timer = setTimeout(() => { if (mic === current && recorder.state === "recording") recorder.stop(); }, 90_000);
-    render();
-  } catch {
-    if (mic !== current) return;
-    cancelMicrophone();
-    current.session.error = "Microphone access is unavailable. Check permissions or type your answer.";
-    render();
-  }
 }
 
 async function submitUpload(form, fields) {
@@ -727,7 +954,7 @@ async function generatePack(fields) {
   const payload = await Promise.all(sources.map(async ({ id, name, type, file, text }) =>
     type === "pdf" ? { id, name, type, data:await blobToBase64(file) } : { id, name, type, text }));
   if (new Blob([JSON.stringify(payload)]).size > 14_900_000) throw new Error("This selection is too large. Choose fewer materials.");
-  const result = await requestAI("bundle", { sources:payload });
+  const result = await ai("bundle", { sources:payload });
   const withIds = (entries) => entries.map((item) => ({ ...item, id:id() }));
   const pack = {
     sample:false, sourceIds:selected, notes:withIds(result.notes), oral:withIds(result.oral),
@@ -770,12 +997,11 @@ async function submitModal(form) {
   try {
     if (kind === "key") {
       const key = fields.get("key").trim();
-      if (!key) throw new Error("Enter an API key for " + activeProvider().name + ".");
-      const selected = provider;
-      const result = await requestAI("connect", {}, selected, key);
-      if (result.status !== "ready") throw new Error(aiProviders[selected].name + " could not confirm the connection.");
-      apiKeys[selected] = key;
-      message = aiProviders[selected].name + " is connected.";
+      if (!key) throw new Error("Enter a Claude API key.");
+      const result = await ai("connect", {}, key);
+      if (result.status !== "ready") throw new Error("Claude could not confirm the connection.");
+      apiKey = key;
+      message = "Claude is connected.";
     } else if (kind === "upload") {
       message = await submitUpload(form, fields);
       destination = "materials";
@@ -790,7 +1016,8 @@ async function submitModal(form) {
       await persist();
       message = "Material removed.";
     } else if (kind === "end-session") {
-      cancelMicrophone();
+      stopDictation();
+      pauseLive("");
       stopGaze(false);
       window.speechSynthesis?.cancel();
       session = null;
@@ -865,13 +1092,7 @@ function dispatch(element) {
   switch (action) {
     case "close": if (!modalBusy) modal.close(); break;
     case "settings": settings(); break;
-    case "disconnect":
-      cancelMicrophone();
-      delete apiKeys[provider];
-      modal.close();
-      render();
-      notify("Session key disconnected.");
-      break;
+    case "disconnect": apiKey = ""; modal.close(); render(); notify("Session key disconnected."); break;
     case "upload": uploadDialog(); break;
     case "generate": generateDialog(); break;
     case "choose-files": modalContent.querySelector('[name="files"]').click(); break;
@@ -900,7 +1121,21 @@ function dispatch(element) {
       window.speechSynthesis.speak(phrase);
       break;
     }
-    case "record": void toggleRecording(); break;
+    case "dictate": toggleDictation(); break;
+    case "hang-up": hangUpLive(); break;
+    case "live-resume": resumeLive(); break;
+    case "live-pause": pauseLive("Paused. Resume when you’re ready."); break;
+    case "live-done": liveAudio?.finish?.(); break;
+    case "live-interrupt": if (session?.live?.status === "speaking") stopLiveAudio(); break;
+    case "live-skip": if (session?.live && !session.live.finished) void liveStep(session, "skip"); break;
+    case "live-repeat":
+      if (session?.live?.lastSaid && session.live.status === "listening") {
+        const current = session;
+        const run = ++current.live.run;
+        stopLiveAudio();
+        void speakLive(current, run, current.live.lastSaid).then(() => { if (!liveStale(current, run)) listenLive(current, run); });
+      }
+      break;
     case "toggle-gaze": toggleGaze(); break;
     case "recalibrate-gaze":
       if (gazeCamera && session?.gaze) {
@@ -921,24 +1156,15 @@ document.addEventListener("submit", (event) => {
   if (!form) return;
   event.preventDefault();
   if (form.dataset.form === "answer") void submitAnswer(form);
+  else if (form.dataset.form === "oral-setup") startOral(form);
+  else if (form.dataset.form === "live-answer") {
+    const answer = form.elements.answer.value.trim();
+    if (answer && session?.live?.status === "listening") { form.reset(); submitLiveAnswer(session, answer); }
+  }
   else void submitModal(form);
 });
 document.addEventListener("change", (event) => {
   const target = event.target;
-  if (target.name === "provider" && Object.hasOwn(aiProviders, target.value) && target.value !== provider) {
-    cancelMicrophone();
-    providerPicked = true;
-    provider = target.value;
-    if (generateAfterConnecting && connected()) {
-      generateAfterConnecting = false;
-      render();
-      generateDialog();
-      return;
-    }
-    render();
-    settings();
-    modalContent.querySelector('[name="provider"]').focus();
-  }
   if (target.name === "files") updateFiles(target);
   if (target.dataset.status) moveCard(target.dataset.status, target.value);
   if (target.name === "choice" && session) session.choice = Number(target.value);
@@ -983,11 +1209,12 @@ document.addEventListener("drop", (event) => {
 modal.addEventListener("cancel", (event) => { if (modalBusy) event.preventDefault(); });
 modal.addEventListener("close", () => {
   generateAfterConnecting = false;
+  pendingRetry = null;
   if (pdfUrl) { URL.revokeObjectURL(pdfUrl); pdfUrl = null; }
 });
 window.addEventListener("popstate", () => navigate(route()));
 window.addEventListener("hashchange", () => { if (route() !== screen) navigate(route()); });
-window.addEventListener("pagehide", () => { cancelMicrophone(); stopGaze(); });
+window.addEventListener("pagehide", () => { stopDictation(); pauseLive("Paused while the page was hidden. Resume to continue."); stopGaze(); });
 document.addEventListener("visibilitychange", () => { if (document.hidden) stopGaze(); });
 document.querySelectorAll("[data-icon]").forEach((element) => { element.innerHTML = icon(element.dataset.icon); });
 
@@ -996,7 +1223,7 @@ if (stored) data = stored;
 render();
 if (!persistenceAvailable) notify("Browser storage is unavailable. Changes will last until this page closes.");
 fetch("/api/config").then((response) => response.json()).then((settings) => {
-  providerConfig = settings.providers || { gemini:settings };
-  if (!providerPicked && !modal.open && Object.hasOwn(aiProviders, settings.defaultProvider)) provider = settings.defaultProvider;
-  renderConnection();
+  config = settings;
+  document.querySelector("#connection-status").textContent = connected() ? "Connected" : "Connect your API key";
+  document.documentElement.dataset.ai = connected() ? "connected" : "disconnected";
 }).catch(() => {});

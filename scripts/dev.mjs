@@ -14,7 +14,9 @@ createServer(async (req, res) => {
       options.duplex = "half";
     }
     const request = new Request(new URL(req.url, origin), options);
+    const started = Date.now();
     const response = await worker.fetch(request, process.env);
+    if (req.url.startsWith("/api/")) console.log(req.method + " " + req.url + " -> " + response.status + " (" + (Date.now() - started) + " ms)");
     res.writeHead(response.status, Object.fromEntries(response.headers));
     if (response.body) Readable.fromWeb(response.body).pipe(res);
     else res.end();

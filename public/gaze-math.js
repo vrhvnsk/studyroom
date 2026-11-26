@@ -2,9 +2,7 @@ const MIN_CALIBRATION_MS = 1_450;
 const MAX_CALIBRATION_SPREAD = 0.15;
 const MIN_VIEW_MS = 3_000;
 const MAX_FRAME_GAP_MS = 400;
-const OUT_OF_RANGE_MS = 2_000;
-const CAMERA_RADIUS = 0.20;
-const CAMERA_HYSTERESIS = 0.03;
+const CAMERA_RADIUS = 0.29;
 const EYES = [
   { corners:[33, 133], lids:[159, 145], iris:468 },
   { corners:[362, 263], lids:[386, 374], iris:473 },
@@ -63,14 +61,8 @@ export function createGazeSession() {
   let trackedMs = 0;
   let nearMs = 0;
   let untrackedMs = 0;
-  let awaySince;
-  let alertActive = false;
-  const offTrackEvents = [];
 
   return {
-    events() {
-      return offTrackEvents.map(({ action, at }) => ({ action, at }));
-    },
     recalibrate() {
       baseline = undefined;
       samples = [];
@@ -78,8 +70,6 @@ export function createGazeSession() {
       previousTime = undefined;
       smoothed = undefined;
       current = undefined;
-      awaySince = undefined;
-      alertActive = false;
     },
     sample(point, time) {
       if (!baseline) {
@@ -103,42 +93,22 @@ export function createGazeSession() {
       }
       const gap = previousTime === undefined ? 0 : time - previousTime;
       previousTime = time;
-      const continuous = gap > 0 && gap <= MAX_FRAME_GAP_MS;
-      const elapsed = continuous ? gap : 0;
-      if (!continuous) {
-        smoothed = undefined;
-        awaySince = undefined;
-        alertActive = false;
-      }
+      const elapsed = gap > 0 && gap <= MAX_FRAME_GAP_MS ? gap : 0;
+      if (!elapsed) smoothed = undefined;
       if (!point) {
         smoothed = undefined;
         current = undefined;
-        awaySince = undefined;
         untrackedMs += elapsed;
-        alertActive = false;
         return { status:"unavailable", progress:100 };
       }
       const offset = { x:point.x - baseline.x, y:point.y - baseline.y };
       smoothed = smoothed ? { x:0.35 * offset.x + 0.65 * smoothed.x, y:0.35 * offset.y + 0.65 * smoothed.y } : offset;
       const distance = Math.hypot(smoothed.x, smoothed.y);
-      const threshold = current === "near" ? CAMERA_RADIUS + CAMERA_HYSTERESIS : CAMERA_RADIUS;
+      const threshold = current === "near" ? CAMERA_RADIUS + 0.04 : CAMERA_RADIUS;
       current = distance <= threshold ? "near" : "away";
       trackedMs += elapsed;
-      if (current === "near") {
-        nearMs += elapsed;
-        awaySince = undefined;
-        alertActive = false;
-      } else {
-        if (!continuous || awaySince === undefined) awaySince = time;
-        if (!alertActive && time - awaySince > OUT_OF_RANGE_MS) {
-          alertActive = true;
-          offTrackEvents.push({
-            action:"Gaze out of the allowed area for more than 2 seconds",
-            at:new Date().toISOString(),
-          });
-        }
-      }
-      return { status:alertActive ? "alert" : current, progress:100, x:smoothed.x, y:smoothed.y };
+      if (current === "near") nearMs += elapsed;
+      return { status:current, progress:100, x:smoothed.x, y:smoothed.y };
     },
     summary() {
       const total = trackedMs + untrackedMs;
