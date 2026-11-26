@@ -150,7 +150,7 @@ const gazeMessages = {
   calibrating:"Look directly into your webcam and hold still.",
   unavailable:"Keep your face in view and your eyes comfortably open.",
   near:"Estimated gaze is near your camera baseline.",
-  away:"Estimated gaze has shifted from your camera baseline.",
+  away:"Gaze has shifted from your camera baseline. This is only an observation, not evidence of cheating.",
   paused:"Camera off. Turn it back on to recalibrate and continue.",
 };
 
@@ -158,7 +158,7 @@ function gazePanel() {
   return '<section class="gaze-panel" aria-labelledby="gaze-title" data-gaze-state="off"><div class="gaze-scope" aria-hidden="true"><i></i><b></b></div>' +
     '<div class="gaze-copy"><div class="gaze-heading"><h3 id="gaze-title">Eye tracking</h3><span class="gaze-chip">Camera off</span></div>' +
     '<p class="gaze-message">' + gazeMessages.off + '</p><div class="gaze-progress" aria-hidden="true" hidden><span></span></div>' +
-    '<details class="gaze-privacy"><summary>About camera feedback</summary><p>Camera images are processed on this device and discarded. Your review saves aggregate estimates on this device. Looking away is normal and has no effect on your score.</p></details></div>' +
+    '<details class="gaze-privacy"><summary>About camera feedback</summary><p>Camera images are processed on this device and discarded. Your review saves aggregate estimates on this device. Gaze shifts can happen while thinking, reading, or because of setup; they are not evidence of cheating and never affect your score.</p></details></div>' +
     '<div class="gaze-controls"><button type="button" class="button outline" data-action="toggle-gaze">' + icon("camera") + '<span>Turn on camera</span></button>' +
     '<button type="button" class="button quiet" data-action="recalibrate-gaze" hidden>' + icon("focus") + 'Recalibrate</button></div></section>';
 }
@@ -227,13 +227,22 @@ function toggleGaze() {
 
 function gazeReview(summary) {
   if (!summary) return "";
+  const hasReviewSignals = Number.isFinite(summary.awayEpisodes);
+  const shiftMetric = hasReviewSignals ?
+    '<div><dt>Prolonged gaze shifts (8s+)</dt><dd>' + summary.awayEpisodes + '</dd></div>' : '';
+  const reviewNote = !hasReviewSignals ?
+    '<p class="notice gaze-caveat">Extended gaze-shift observations were not recorded for this session.</p>' :
+    summary.awayEpisodes ?
+      '<p class="notice warning gaze-caveat">Review signal: ' + summary.awayEpisodes + ' sustained gaze shift' + (summary.awayEpisodes === 1 ? '' : 's') + ' observed (longest ' + summary.longestAwaySeconds + ' s). This is not evidence of cheating; gaze varies for many ordinary reasons and this signal does not affect scoring.</p>' :
+      '<p class="notice gaze-caveat">No sustained gaze shifts of 8 seconds or longer were observed. This cannot determine whether cheating occurred.</p>';
   const data = summary.nearPercent === null ?
     '<p class="subtle">There were too few usable camera samples to estimate gaze for this session.</p>' :
     '<dl class="gaze-metrics"><div><dt>Near camera baseline</dt><dd>' + summary.nearPercent + '%</dd></div>' +
     '<div><dt>Usable camera time</dt><dd>' + summary.trackedSeconds + ' s</dd></div>' +
-    '<div><dt>Usable sample coverage</dt><dd>' + summary.coverage + '%</dd></div></dl>';
+    '<div><dt>Usable sample coverage</dt><dd>' + summary.coverage + '%</dd></div>' +
+    shiftMetric + '</dl>' + reviewNote;
   return '<section class="panel gaze-review"><div class="resource-name">' + toolIcon("eye","blue") +
-    '<div><h2>Eye tracking feedback</h2><p class="subtle">An estimate of where you looked relative to your calibration. This has no effect on your exam score.</p></div></div>' + data + '</section>';
+    '<div><h2>Eye tracking observations</h2><p class="subtle">Approximate, on-device estimates relative to your calibration. They are not a cheating determination and have no effect on your exam score.</p></div></div>' + data + '</section>';
 }
 
 function sourceById(sourceId) { return data.sources.find((source) => source.id === sourceId); }

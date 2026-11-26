@@ -38,7 +38,7 @@ When the examiner moves on, Studyroom grades that question from its transcript. 
 
 Eye tracking starts off in every oral exam. Choose **Turn on camera**, allow camera access, and hold your gaze on the webcam to calibrate. The moving dot shows approximate gaze relative to your camera baseline. If your setup changes, choose **Recalibrate**. You can turn the camera off at any time.
 
-The browser downloads the pinned [MediaPipe Face Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker?tab=Web) and runs it locally in a dedicated worker. Studyroom discards frames and saves only aggregate results in the completed session's local review. Gaze is a rehearsal aid and is independent of AI processing and exam scores. Camera access requires HTTPS or localhost and a browser with the required webcam, worker, and graphics APIs.
+The browser downloads the pinned [MediaPipe Face Landmarker](https://developers.google.com/edge/mediapipe/solutions/vision/face_landmarker?tab=Web) and runs it locally in a dedicated worker. Studyroom discards frames and saves only aggregate results in the completed session's local review. The review may note gaze shifts sustained for at least eight seconds; this is a limited observation, not cheating detection or evidence of misconduct. Gaze shifts can happen for many ordinary reasons, and these observations never affect exam scores. Camera access requires HTTPS or localhost and a browser with the required webcam, worker, and graphics APIs.
 
 ## Verify and build
 

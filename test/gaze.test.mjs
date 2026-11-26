@@ -35,7 +35,9 @@ test("calibration ignores time before a stable baseline, and the report tracks u
   assert.equal(signal.sample(center, 1_650).status, "near");
   assert.equal(signal.summary().nearPercent, null);
   for (let time = 1_800; time <= 4_950; time += 150) signal.sample(center, time);
-  assert.deepEqual(signal.summary(), { nearPercent:100, trackedSeconds:3, coverage:100 });
+  assert.deepEqual(signal.summary(), {
+    nearPercent:100, trackedSeconds:3, coverage:100, awaySeconds:0, longestAwaySeconds:0, awayEpisodes:0,
+  });
   for (let time = 5_100; time <= 7_500; time += 150) signal.sample(null, time);
   assert.ok(signal.summary().coverage < 60);
   const moved = { x:0.75, y:0.9 };
@@ -44,6 +46,28 @@ test("calibration ignores time before a stable baseline, and the report tracks u
   signal.recalibrate();
   assert.equal(signal.sample(moved, 16_000).status, "calibrating");
   assert.equal(signal.summary().nearPercent, 100);
+});
+
+test("only continuous gaze shifts of eight seconds or more create a review signal", () => {
+  const signal = createGazeSession();
+  for (let time = 0; time <= 1_500; time += 150) signal.sample({ x:0, y:0 }, time);
+  for (let time = 1_650; time < 9_450; time += 150) signal.sample({ x:0.8, y:0.8 }, time);
+  assert.equal(signal.summary().awayEpisodes, 0, "a shift shorter than eight seconds is not flagged");
+  signal.sample({ x:0.8, y:0.8 }, 9_450);
+  assert.equal(signal.summary().awayEpisodes, 0);
+  signal.sample({ x:0.8, y:0.8 }, 9_600);
+  assert.equal(signal.summary().awayEpisodes, 1);
+  assert.equal(signal.summary().longestAwaySeconds, 8);
+  assert.equal(signal.summary().nearPercent, 0);
+});
+
+test("untracked gaps break continuity rather than extending a gaze-shift signal", () => {
+  const signal = createGazeSession();
+  for (let time = 0; time <= 1_500; time += 150) signal.sample({ x:0, y:0 }, time);
+  for (let time = 1_650; time < 9_000; time += 150) signal.sample({ x:0.8, y:0.8 }, time);
+  signal.sample(null, 9_150);
+  for (let time = 9_300; time < 16_650; time += 150) signal.sample({ x:0.8, y:0.8 }, time);
+  assert.equal(signal.summary().awayEpisodes, 0);
 });
 
 test("a large movement during calibration restarts the stable hold", () => {

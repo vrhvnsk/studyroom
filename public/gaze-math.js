@@ -2,6 +2,7 @@ const MIN_CALIBRATION_MS = 1_450;
 const MAX_CALIBRATION_SPREAD = 0.15;
 const MIN_VIEW_MS = 3_000;
 const MAX_FRAME_GAP_MS = 400;
+const REVIEW_SHIFT_MS = 8_000;
 const CAMERA_RADIUS = 0.29;
 const EYES = [
   { corners:[33, 133], lids:[159, 145], iris:468 },
@@ -61,6 +62,11 @@ export function createGazeSession() {
   let trackedMs = 0;
   let nearMs = 0;
   let untrackedMs = 0;
+  let awayMs = 0;
+  let currentAwayMs = 0;
+  let longestAwayMs = 0;
+  let awayEpisodes = 0;
+  let countedAway = false;
 
   return {
     recalibrate() {
@@ -70,6 +76,8 @@ export function createGazeSession() {
       previousTime = undefined;
       smoothed = undefined;
       current = undefined;
+      currentAwayMs = 0;
+      countedAway = false;
     },
     sample(point, time) {
       if (!baseline) {
@@ -94,10 +102,16 @@ export function createGazeSession() {
       const gap = previousTime === undefined ? 0 : time - previousTime;
       previousTime = time;
       const elapsed = gap > 0 && gap <= MAX_FRAME_GAP_MS ? gap : 0;
-      if (!elapsed) smoothed = undefined;
+      if (!elapsed) {
+        smoothed = undefined;
+        currentAwayMs = 0;
+        countedAway = false;
+      }
       if (!point) {
         smoothed = undefined;
         current = undefined;
+        currentAwayMs = 0;
+        countedAway = false;
         untrackedMs += elapsed;
         return { status:"unavailable", progress:100 };
       }
@@ -107,7 +121,19 @@ export function createGazeSession() {
       const threshold = current === "near" ? CAMERA_RADIUS + 0.04 : CAMERA_RADIUS;
       current = distance <= threshold ? "near" : "away";
       trackedMs += elapsed;
-      if (current === "near") nearMs += elapsed;
+      if (current === "near") {
+        nearMs += elapsed;
+        currentAwayMs = 0;
+        countedAway = false;
+      } else {
+        awayMs += elapsed;
+        currentAwayMs += elapsed;
+        longestAwayMs = Math.max(longestAwayMs, currentAwayMs);
+        if (currentAwayMs >= REVIEW_SHIFT_MS && !countedAway) {
+          awayEpisodes += 1;
+          countedAway = true;
+        }
+      }
       return { status:current, progress:100, x:smoothed.x, y:smoothed.y };
     },
     summary() {
@@ -116,6 +142,9 @@ export function createGazeSession() {
         trackedSeconds: Math.round(trackedMs / 1_000),
         coverage: total ? Math.round(100 * trackedMs / total) : 0,
         nearPercent: trackedMs >= MIN_VIEW_MS ? Math.round(100 * nearMs / trackedMs) : null,
+        awaySeconds: Math.round(awayMs / 1_000),
+        longestAwaySeconds: Math.round(longestAwayMs / 1_000),
+        awayEpisodes,
       };
     },
   };
